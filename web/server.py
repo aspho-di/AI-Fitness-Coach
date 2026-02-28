@@ -17,7 +17,8 @@ from ui_renderer import UIRenderer
 from calibration import Calibrator
 
 # ── ИСПРАВЛЕНИЕ: указываем абсолютный путь к папке web ────────────────────
-WEB_DIR = os.path.dirname(os.path.abspath(__file__))
+WEB_DIR     = os.path.dirname(os.path.abspath(__file__))
+LANDING_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'landing')
 
 app = Flask(__name__, static_folder=WEB_DIR)
 
@@ -178,6 +179,10 @@ def tracker_thread(source, path=""):
 @app.route('/')
 def index():
     return send_from_directory(WEB_DIR, 'index.html')
+
+@app.route('/landing/<path:filename>')
+def landing_files(filename):
+    return send_from_directory(LANDING_DIR, filename)
 
 @app.route('/<path:filename>')
 def static_files(filename):
