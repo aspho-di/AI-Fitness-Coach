@@ -16,7 +16,10 @@ from angle_calculator import (
 from ui_renderer import UIRenderer
 from calibration import Calibrator
 
-app = Flask(__name__, static_folder='.')
+# ── ИСПРАВЛЕНИЕ: указываем абсолютный путь к папке web ────────────────────
+WEB_DIR = os.path.dirname(os.path.abspath(__file__))
+
+app = Flask(__name__, static_folder=WEB_DIR)
 
 # ── Глобальное состояние ───────────────────────────────────────────────────
 state = {
@@ -174,7 +177,11 @@ def tracker_thread(source, path=""):
 
 @app.route('/')
 def index():
-    return send_from_directory('.', 'index.html')
+    return send_from_directory(WEB_DIR, 'index.html')
+
+@app.route('/<path:filename>')
+def static_files(filename):
+    return send_from_directory(WEB_DIR, filename)
 
 
 @app.route('/api/start', methods=['POST'])
