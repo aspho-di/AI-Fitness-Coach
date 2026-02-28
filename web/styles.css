@@ -100,9 +100,9 @@ nav {
 
 /* ── HERO ──────────────────────────────────────────────────────────────── */
 .hero {
-  position: relative; min-height: 100vh;
+  position: relative;
   display: grid; grid-template-columns: 1fr 1fr;
-  align-items: center; gap: 60px;
+  align-items: start; gap: 60px;
   padding: 140px 64px 80px;
   overflow: hidden;
 }
@@ -162,7 +162,8 @@ nav {
 
 /* ── Download buttons ──────────────────────────────────────────────────── */
 .dl-group {
-  display: flex; flex-direction: column; gap: 14px;
+  display: flex; flex-direction: row; gap: 14px; flex-wrap: wrap;
+  margin-top: 16px;
   animation: fadeUp 0.7s 0.3s ease both;
 }
 
@@ -171,7 +172,7 @@ nav {
   background: var(--accent); color: var(--bg);
   border: none; cursor: none; text-decoration: none;
   transition: all 0.25s; position: relative; overflow: hidden;
-  max-width: 400px;
+  flex: 1; min-width: 0;
 }
 .dl-primary::before {
   content: ''; position: absolute; inset: 0;
@@ -201,7 +202,7 @@ nav {
   display: flex; align-items: center;
   background: transparent; border: 1px solid var(--border); color: var(--text);
   cursor: none; text-decoration: none;
-  transition: all 0.25s; max-width: 400px;
+  transition: all 0.25s; flex: 1; min-width: 0;
 }
 .dl-secondary:hover {
   border-color: rgba(0,195,255,0.4);
@@ -213,7 +214,8 @@ nav {
 .dl-note {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.7rem; color: var(--muted);
-  display: flex; align-items: center; gap: 8px; margin-top: 4px;
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 10px;
 }
 .dl-note::before { content: ''; width: 20px; height: 1px; background: var(--muted); }
 
@@ -266,15 +268,16 @@ nav {
 .term-preview {
   margin: 16px 0 8px; background: #0a0d14;
   border: 1px solid rgba(0,245,160,0.08);
-  padding: 20px; display: flex; gap: 24px; align-items: center;
+  padding: 16px 20px; display: flex; gap: 20px; align-items: center;
 }
-.skel-mini svg { width: 70px; animation: squatMini 3s ease-in-out infinite; }
-.preview-stats { display: flex; flex-direction: column; gap: 8px; }
+.skel-mini { flex-shrink: 0; }
+.skel-mini svg { width: 90px; height: 110px; }
+.preview-stats { display: flex; flex-direction: column; gap: 10px; flex: 1; }
 .ps-row   { display: flex; align-items: center; gap: 10px; }
-.ps-label { font-size: 0.62rem; color: var(--muted); letter-spacing: 1px; width: 60px; }
-.ps-val   { font-size: 0.9rem; font-weight: 700; }
+.ps-label { font-size: 0.62rem; color: var(--muted); letter-spacing: 1px; width: 52px; }
+.ps-val   { font-size: 1rem; font-weight: 700; min-width: 52px; }
 .ps-bar   { flex: 1; height: 2px; background: rgba(255,255,255,0.06); border-radius: 1px; overflow: hidden; }
-.ps-fill  { height: 100%; background: linear-gradient(90deg, var(--accent), var(--blue)); }
+.ps-fill  { height: 100%; background: linear-gradient(90deg, var(--accent), var(--blue)); transition: width 0.06s linear; }
 
 /* ── Section headers ───────────────────────────────────────────────────── */
 .stag {
