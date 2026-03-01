@@ -1,700 +1,1070 @@
-import cv2
-import time
-import argparse
-import sys
-import numpy as np
-from pose_detector import PoseDetector
-from angle_calculator import (
-    calculate_angle_3d,
-    calculate_back_angle,
-    calculate_knee_deviation_3d,
-    estimate_camera_angle,
-    get_best_leg
+"""
+AI Fitness Coach — PyQt6 приложение
+Запуск: python app_qt.py
+Установка: pip install PyQt6
+"""
+import sys, os, time, cv2, numpy as np
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QStackedWidget,
+    QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
+    QFrame, QFileDialog, QSizePolicy, QGraphicsDropShadowEffect,
+    QSpacerItem
 )
-from ui_renderer import UIRenderer
-from calibration import Calibrator
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve, QPoint, QRect, QSize
+from PyQt6.QtGui import QImage, QPixmap, QFont, QPainter, QColor, QPen, QPalette, QLinearGradient, QBrush
 
+sys.path.insert(0, os.path.dirname(__file__))
 
-BACK_ANGLE_LIMIT      = 35
-KNEE_DEVIATION_LIMIT  = 0.15
-CAMERA_WARNING_FRAMES = 90
-WINDOW_NAME           = "AI Fitness Coach"
+# ── Цветовая система ──────────────────────────────────────────────────────
+C = {
+    "bg":       "#060a0e",
+    "panel":    "#0d1a24",
+    "panel2":   "#101f2c",
+    "border":   "#1a2e3e",
+    "border2":  "#223040",
+    "neon":     "#00e5a0",
+    "neon2":    "#00b4d8",
+    "red":      "#ff3b5c",
+    "amber":    "#ffb703",
+    "muted":    "#4a6070",
+    "white":    "#dce8f0",
+    "dim":      "#1e2e3a",
+}
 
-# Размеры окна по умолчанию
-DEFAULT_W = 1280
-DEFAULT_H = 720
+# ── QSS Стили ─────────────────────────────────────────────────────────────
+GLOBAL_STYLE = f"""
+* {{
+    font-family: 'Segoe UI', 'SF Pro Display', Arial, sans-serif;
+}}
+QMainWindow, QWidget#root {{
+    background: {C['bg']};
+}}
+QWidget {{
+    color: {C['white']};
+}}
+"""
 
+BTN_PRIMARY = f"""
+QPushButton {{
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+        stop:0 #0a2018, stop:1 #050f0c);
+    color: {C['neon']};
+    border: 1px solid #1a4030;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    padding: 0 28px;
+    min-height: 48px;
+    text-transform: uppercase;
+}}
+QPushButton:hover {{
+    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+        stop:0 #0f3025, stop:1 #081a12);
+    border: 1px solid {C['neon']};
+    color: {C['neon']};
+}}
+QPushButton:pressed {{
+    background: #040d0a;
+    border: 1px solid #009060;
+}}
+"""
 
-def open_file_dialog():
-    """Открывает системный диалог выбора файла через tkinter."""
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()          # прячем главное окно tk
-        root.attributes('-topmost', True)
-        path = filedialog.askopenfilename(
-            title="Select video file",
-            filetypes=[
-                ("Video files", "*.mp4 *.avi *.mov *.mkv *.wmv *.flv"),
-                ("All files", "*.*")
+BTN_SECONDARY = f"""
+QPushButton {{
+    background: {C['panel2']};
+    color: {C['muted']};
+    border: 1px solid {C['dim']};
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    padding: 0 16px;
+    min-height: 40px;
+}}
+QPushButton:hover {{
+    background: #162028;
+    border: 1px solid #3a5060;
+    color: #8ab0c0;
+}}
+QPushButton:pressed {{
+    background: {C['panel']};
+}}
+"""
+
+BTN_MENU = f"""
+QPushButton {{
+    background: {C['panel2']};
+    color: {C['muted']};
+    border: 1px solid {C['dim']};
+    border-radius: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    min-width: 80px;
+    min-height: 44px;
+}}
+QPushButton:hover {{
+    background: #162028;
+    border: 1px solid {C['neon']};
+    color: {C['neon']};
+}}
+"""
+
+# ── Утилиты ───────────────────────────────────────────────────────────────
+def make_shadow(widget, color=C['neon'], blur=20, alpha=80):
+    fx = QGraphicsDropShadowEffect(widget)
+    fx.setBlurRadius(blur)
+    fx.setOffset(0, 0)
+    c = QColor(color)
+    c.setAlpha(alpha)
+    fx.setColor(c)
+    widget.setGraphicsEffect(fx)
+    return fx
+
+def neon_label(text, color=None, size=24, mono=True, parent=None):
+    lbl = QLabel(text, parent)
+    if color is None: color = C['neon']
+    font_family = "Consolas, 'Courier New', monospace" if mono else "'Segoe UI', Arial"
+    lbl.setStyleSheet(f"""
+        color: {color};
+        font-family: Consolas, 'Courier New', monospace;
+        font-size: {size}px;
+        font-weight: 700;
+        letter-spacing: 3px;
+        background: transparent;
+    """)
+    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    make_shadow(lbl, color, 16, 100)
+    return lbl
+
+def muted_label(text, size=10, parent=None):
+    lbl = QLabel(text, parent)
+    lbl.setStyleSheet(f"""
+        color: {C['muted']};
+        font-size: {size}px;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        background: transparent;
+    """)
+    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    return lbl
+
+def hsep():
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.HLine)
+    line.setStyleSheet(f"color: {C['border2']}; background: {C['border2']}; max-height: 1px;")
+    return line
+
+def vsep():
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.VLine)
+    line.setFixedWidth(1)
+    line.setStyleSheet(f"background: {C['border']}; margin: 8px 0;")
+    return line
+
+# ── HUD Frame с угловыми акцентами ────────────────────────────────────────
+class HudPanel(QFrame):
+    """Панель с неоновыми угловыми маркерами и свечением рамки."""
+    def __init__(self, parent=None, accent=None, corner=20):
+        super().__init__(parent)
+        self._accent = QColor(accent or C['neon'])
+        self._corner = corner
+        self.setStyleSheet(f"""
+            QFrame {{
+                background: {C['panel']};
+                border: 1px solid {C['border2']};
+                border-radius: 10px;
+            }}
+        """)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        p  = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r  = self.rect().adjusted(1, 1, -1, -1)
+        cs = self._corner
+        ac = self._accent
+
+        # Свечение угловых линий
+        for width, alpha in [(6, 18), (4, 30), (2, 60), (2, 255)]:
+            gc = QColor(ac)
+            gc.setAlpha(alpha)
+            pen = QPen(gc, width)
+            pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+            p.setPen(pen)
+            # Все 4 угла
+            segs = [
+                (r.left(), r.top() + cs,   r.left(),      r.top(),       r.left() + cs,  r.top()),
+                (r.right()-cs, r.top(),     r.right(),     r.top(),       r.right(),      r.top() + cs),
+                (r.left(), r.bottom()-cs,   r.left(),      r.bottom(),    r.left() + cs,  r.bottom()),
+                (r.right()-cs, r.bottom(),  r.right(),     r.bottom(),    r.right(),      r.bottom()-cs),
             ]
-        )
-        root.destroy()
-        return path or ''
-    except Exception:
-        return ''
+            for x1,y1,mx,my,x2,y2 in segs:
+                p.drawLine(QPoint(x1,y1), QPoint(mx,my))
+                p.drawLine(QPoint(mx,my), QPoint(x2,y2))
+        p.end()
 
+# ── Виджет видеокадра ─────────────────────────────────────────────────────
+class VideoWidget(QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet("background: #000; border: none;")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumSize(320, 180)
 
-def get_source_interactive(renderer):
-    """
-    Показывает экран выбора источника в окне OpenCV.
-    Возвращает (source_type, path).
-    source_type: 'webcam' или 'video'
-    """
-    frame    = np.zeros((DEFAULT_H, DEFAULT_W, 3), dtype=np.uint8)
-    selected = 0  # 0 = webcam, 1 = video
+    def show_frame(self, bgr):
+        if bgr is None: return
+        h, w = bgr.shape[:2]
+        vw = max(self.width(),  1)
+        vh = max(self.height(), 1)
+        scale = min(vw/w, vh/h)
+        nw, nh = int(w*scale), int(h*scale)
+        frame = cv2.resize(bgr, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        rgb   = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img   = QImage(rgb.data, nw, nh, nw*3, QImage.Format.Format_RGB888)
+        self.setPixmap(QPixmap.fromImage(img))
 
-    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WINDOW_NAME, DEFAULT_W, DEFAULT_H)
+# ── Рабочий поток ─────────────────────────────────────────────────────────
+class Worker(QThread):
+    preview_frame  = pyqtSignal(object)
+    calib_frame    = pyqtSignal(object)
+    calib_done     = pyqtSignal(float, float)
+    analysis_frame = pyqtSignal(object)
+    hud            = pyqtSignal(int, str, str, str, int, int, bool, list, int)
+    # hud: counter, stage, feedback, color_hex, fps, back_angle, back_good, warnings, depth_pct
+    ended          = pyqtSignal(int)
 
-    # Мышь для экрана меню
-    menu_mouse   = [0, 0]
-    menu_click   = [False]
+    def __init__(self):
+        super().__init__()
+        self._source   = None
+        self._path     = ''
+        self._mode     = None
+        self._alive    = True
+        self._up       = 140.0
+        self._dn       = 90.0
 
-    def on_menu_mouse(event, x, y, flags, param):
-        menu_mouse[0] = x
-        menu_mouse[1] = y
-        if event == cv2.EVENT_LBUTTONUP:
-            menu_click[0] = True
+    def setup(self, source, path=''):
+        self._source = source
+        self._path   = path
 
-    cv2.setMouseCallback(WINDOW_NAME, on_menu_mouse)
+    def go_preview(self):   self._mode = 'preview'
+    def go_calibrate(self): self._mode = 'calibrate'
+    def go_analyze(self, up=None, dn=None):
+        if up is not None: self._up = up
+        if dn is not None: self._dn = dn
+        self._mode = 'analyze'
 
-    while True:
-        display = frame.copy()
-        btns = renderer.draw_source_selection(display, selected, menu_mouse)
-        cv2.imshow(WINDOW_NAME, display)
+    def stop(self):
+        self._alive = False
+        self.wait(2000)
 
-        # Обработка клика мышью
-        if menu_click[0]:
-            menu_click[0] = False
-            mx, my = menu_mouse
-            for i, (bx1, by1, bx2, by2) in enumerate(btns):
-                if bx1 <= mx <= bx2 and by1 <= my <= by2:
-                    selected = i
-                    # Двойной клик (уже выбран) или просто подтверждение кликом
-                    if i == 0:
-                        return 'webcam', ''
-                    else:
-                        cv2.destroyAllWindows()
-                        path = open_file_dialog()
-                        if not path:
-                            cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-                            cv2.resizeWindow(WINDOW_NAME, DEFAULT_W, DEFAULT_H)
-                            cv2.setMouseCallback(WINDOW_NAME, on_menu_mouse)
-                        else:
-                            return 'video', path
+    def run(self):
+        from pose_detector import PoseDetector
+        from angle_calculator import (calculate_angle_3d, calculate_back_angle,
+            calculate_knee_deviation_3d, estimate_camera_angle, get_best_leg)
+        from ui_renderer import UIRenderer
 
-        # waitKeyEx возвращает полный код клавиши (нужен для стрелок на Windows)
-        key = cv2.waitKeyEx(33)
-
-        # ── Закрытие крестиком ────────────────────────────────────────────
-        try:
-            visible = cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE)
-        except Exception:
-            visible = 0
-        if visible < 1:
-            cv2.destroyAllWindows()
-            sys.exit(0)
-
-        if key == -1:
-            continue
-
-        # ── Стрелки (Windows: 0x260000 / 0x280000, Linux: 82 / 84) ──────
-        if key in (0x260000, 65362, 82, ord('w'), ord('W')):   # вверх
-            selected = 0
-        elif key in (0x280000, 65364, 84, ord('s'), ord('S')): # вниз
-            selected = 1
-
-        elif key == ord('1'):
-            selected = 0
-        elif key == ord('2'):
-            selected = 1
-
-        elif key & 0xFF == ord('q'):
-            cv2.destroyAllWindows()
-            sys.exit(0)
-
-        elif key & 0xFF == ord('f'):
-            toggle_fullscreen()
-
-        elif key & 0xFF in (13, 32):  # Enter / Space
-            if selected == 0:
-                return 'webcam', ''
-            else:
-                # Открываем системный диалог выбора файла
-                cv2.destroyAllWindows()
-                path = open_file_dialog()
-                if not path:
-                    # Если отменили — возвращаемся в меню
-                    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-                    cv2.resizeWindow(WINDOW_NAME, DEFAULT_W, DEFAULT_H)
-                    continue
-                return 'video', path
-
-
-def toggle_fullscreen():
-    """Переключает полноэкранный режим."""
-    prop = cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN)
-    if prop == cv2.WINDOW_FULLSCREEN:
-        cv2.setWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
-    else:
-        cv2.setWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-
-
-def get_source_from_args():
-    """Читает аргументы командной строки."""
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--source', type=str, default=None, choices=['webcam', 'video'])
-    parser.add_argument('--path',   type=str, default='')
-    parser.add_argument('--width',  type=int, default=DEFAULT_W)
-    parser.add_argument('--height', type=int, default=DEFAULT_H)
-    return parser.parse_args()
-
-
-def show_no_camera_screen(renderer):
-    """
-    Показывает экран ошибки камеры.
-    Возвращает True = вернуться в меню, False = выйти.
-    """
-    frame = np.zeros((DEFAULT_H, DEFAULT_W, 3), dtype=np.uint8)
-
-    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WINDOW_NAME, DEFAULT_W, DEFAULT_H)
-
-    while True:
-        display = frame.copy()
-
-        h, w = DEFAULT_H, DEFAULT_W
-        # Тёмный фон с рамкой
-        cv2.rectangle(display, (0, 0), (w, h), (10, 13, 20), -1)
-        cv2.rectangle(display, (2, 2), (w-2, h-2), (50, 0, 0), 2)
-
-        # Иконка — перечёркнутый круг
-        cx, cy, r = w//2, h//2 - 40, 60
-        cv2.circle(display, (cx, cy), r, (60, 0, 0), -1)
-        cv2.circle(display, (cx, cy), r, (0, 50, 200), 3)
-        cv2.line(display, (cx - r + 15, cy - r + 15), (cx + r - 15, cy + r - 15), (0, 50, 200), 4)
-
-        # Текст
-        t1 = "CAMERA NOT FOUND"
-        t2 = "Could not open webcam or video file."
-        t3 = "Press ENTER to go back   |   Q to quit"
-
-        for txt, y, scale, col in [
-            (t1, h//2 + 50, 1.1, (0, 80, 255)),
-            (t2, h//2 + 95, 0.65, (100, 110, 130)),
-            (t3, h//2 + 145, 0.6, (0, 245, 160)),
-        ]:
-            tw = cv2.getTextSize(txt, cv2.FONT_HERSHEY_DUPLEX, scale, 2)[0][0]
-            cv2.putText(display, txt, (w//2 - tw//2, y),
-                        cv2.FONT_HERSHEY_DUPLEX, scale, col, 2, cv2.LINE_AA)
-
-        cv2.imshow(WINDOW_NAME, display)
-        key = cv2.waitKey(33) & 0xFF
-
-        try:
-            visible = cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE)
-        except Exception:
-            visible = 0
-        if visible < 1:
-            return False
-
-        if key in (13, 32):   # Enter / Space → назад в меню
-            return True
-        elif key == ord('q') or key == 27:
-            return False
-
-
-def letterbox(frame, target_w, target_h):
-    """
-    Масштабирует кадр с сохранением пропорций.
-    Добавляет чёрные полосы сверху/снизу или по бокам (letterbox).
-    """
-    fh, fw = frame.shape[:2]
-    scale  = min(target_w / fw, target_h / fh)
-    nw     = int(fw * scale)
-    nh     = int(fh * scale)
-
-    resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
-
-    canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
-    x_off  = (target_w - nw) // 2
-    y_off  = (target_h - nh) // 2
-    canvas[y_off:y_off+nh, x_off:x_off+nw] = resized
-    return canvas
-
-
-def main():
-    args     = get_source_from_args()
-    detector = PoseDetector(detection_confidence=0.7, tracking_confidence=0.7)
-    renderer = UIRenderer()
-
-    # ── Главный цикл — позволяет вернуться в меню ─────────────────────────
-    while True:
-        # ── Выбор источника ───────────────────────────────────────────────
-        if args.source is None:
-            source, path = get_source_interactive(renderer)
-        elif args.source == 'video':
-            source, path = 'video', args.path
-        else:
-            source, path = 'webcam', ''
-
-        # После первого прохода всегда показываем меню
-        args.source = None
-
-        # ── Открываем захват ──────────────────────────────────────────────
-        is_video = (source == 'video' and path)
-        if is_video:
-            print(f"Opening video: {path}")
-            cap = cv2.VideoCapture(path)
-        else:
-            print("Opening webcam...")
-            cap = cv2.VideoCapture(0)
-
-        # ── Окно ──────────────────────────────────────────────────────────
-        cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(WINDOW_NAME, DEFAULT_W, DEFAULT_H)
+        renderer = UIRenderer()
+        detector = PoseDetector(0.7, 0.7)
+        cap = (cv2.VideoCapture(0) if self._source == 'webcam'
+               else cv2.VideoCapture(self._path))
 
         if not cap.isOpened():
-            go_back = show_no_camera_screen(renderer)
-            if not go_back:
-                break
-            continue
+            self._alive = False; return
 
-        # ── Калибровка только для камеры, для видео используем дефолт ────
-        if is_video:
-            SQUAT_UP_ANGLE   = 140.0
-            SQUAT_DOWN_ANGLE = 90.0
+        # Передаём реальный fps источника в детектор для точных таймстемпов
+        src_fps = cap.get(cv2.CAP_PROP_FPS)
+        detector.set_fps(src_fps if src_fps > 0 else 30.0)
 
-            # ── Экран предпросмотра видео с кнопкой START ANALYSIS ────────
-            vid_mouse = [0, 0]
-            vid_click = [False]
+        # Первый кадр для видео
+        if self._source == 'video':
+            ok, first = cap.read()
+            if ok: self.preview_frame.emit(first)
 
-            def on_vid_mouse(event, x, y, flags, param):
-                vid_mouse[0] = x
-                vid_mouse[1] = y
-                if event == cv2.EVENT_LBUTTONUP:
-                    vid_click[0] = True
+        # Предпросмотр
+        while self._alive and self._mode == 'preview':
+            if self._source == 'webcam':
+                ok, f = cap.read()
+                if ok: self.preview_frame.emit(f)
+            self.msleep(30)
 
-            cv2.setMouseCallback(WINDOW_NAME, on_vid_mouse)
+        # Калибровка
+        if self._alive and self._mode == 'calibrate':
+            up_a  = self._cal_phase(cap, detector, renderer, 'UP')
+            dn_a  = self._cal_phase(cap, detector, renderer, 'DOWN')
+            # Передаём сырые углы — пороги считаются в go_analyze
+            self.calib_done.emit(round(up_a, 1), round(dn_a, 1))
+            self._mode = None
+            while self._alive and self._mode is None:
+                self.msleep(30)
 
-            # Читаем первый кадр для предпросмотра
-            ret_p, preview_frame = cap.read()
-            if not ret_p:
-                cap.release()
-                continue
+        # ── Анализ: счётчик приседаний ──────────────────────────────────────
+        #
+        # Алгоритм: относительный гистерезис, не зависит от абсолютных порогов.
+        #
+        # После калибровки знаем standing_angle (стоя) и squat_angle (присед).
+        # Реп засчитывается когда:
+        #   1. Угол опустился ниже UP_THRESH (= standing * 0.85) → вошли в DOWN
+        #   2. Угол поднялся выше UP_THRESH обратно → вышли из DOWN
+        #   3. За время DOWN минимальный угол был <= DN_THRESH (= standing * 0.60)
+        #
+        # Это работает при любом угле камеры — пороги адаптируются к
+        # реальному стоячему углу пользователя, а не к абсолютным 140°/90°.
 
-            start_analysis = False
-            while not start_analysis:
-                if preview_frame is not None:
-                    preview = letterbox(preview_frame, DEFAULT_W, DEFAULT_H)
-                else:
-                    preview = np.zeros((DEFAULT_H, DEFAULT_W, 3), dtype=np.uint8)
+        counter           = 0
+        stage             = None      # None | 'UP' | 'DOWN'
+        min_angle_reached = 360.0
+        angle_buf         = []
+        BUF_SIZE          = 5
 
-                h_p, w_p = preview.shape[:2]
+        # Пороги из калибровки; если не было — используем дефолты
+        # self._up = стоячий угол (после калибровки ~160°, дефолт 140°)
+        # self._dn = приседной угол (после калибровки ~70°,  дефолт 90°)
+        standing = self._up
+        squatting = self._dn
 
-                # Тёмный оверлей снизу
-                overlay = preview.copy()
-                cv2.rectangle(overlay, (0, h_p - 120), (w_p, h_p), (10, 13, 20), -1)
-                cv2.addWeighted(overlay, 0.80, preview, 0.20, 0, preview)
+        # UP_THRESH: угол выше которого = "стоя"  (85% от стоячего)
+        # DN_THRESH: минимальный угол для засчёта репа (среднее стоя+присед)
+        UP_THRESH = round(standing * 0.85, 1)
+        DN_THRESH = round((standing + squatting) / 2.0, 1)
 
-                # Заголовок
-                title = "VIDEO LOADED"
-                tw = cv2.getTextSize(title, cv2.FONT_HERSHEY_DUPLEX, 1.0, 2)[0][0]
-                cv2.putText(preview, title, (w_p//2 - tw//2, h_p - 82),
-                            cv2.FONT_HERSHEY_DUPLEX, 1.0, (0, 245, 160), 2, cv2.LINE_AA)
+        # Гарантируем рабочий зазор
+        if UP_THRESH - DN_THRESH < 20:
+            DN_THRESH = UP_THRESH - 20
 
-                import os
-                fname = os.path.basename(path)
-                sw = cv2.getTextSize(fname, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 1)[0][0]
-                cv2.putText(preview, fname, (w_p//2 - sw//2, h_p - 55),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.52, (160, 170, 190), 1, cv2.LINE_AA)
+        print(f"[Analyze] standing={standing} squatting={squatting} UP_THRESH={UP_THRESH} DN_THRESH={DN_THRESH}")
 
-                # Кнопки
-                mx, my = vid_mouse
-                bx1 = w_p//2 - 140; bx2 = w_p//2 + 140
-                by1 = h_p - 42;     by2 = h_p - 6
-                btn_hover = renderer.draw_button(preview, "START ANALYSIS", bx1, by1, bx2, by2, vid_mouse, 'primary')
-                bk_hover  = renderer.draw_button(preview, "< MENU", 10, h_p - 42, 120, h_p - 6, vid_mouse, 'secondary')
+        fps_t = time.time(); fps_n = 0; fps = 0
+        BACK_LIM, KNEE_LIM = 35, 0.15
+        current_leg = 'left'
 
-                cv2.imshow(WINDOW_NAME, preview)
-                key = cv2.waitKey(1) & 0xFF
-
-                if vid_click[0]:
-                    vid_click[0] = False
-                    if btn_hover:
-                        start_analysis = True
-                    elif bk_hover:
-                        cap.release()
-                        cap = None
-                        break
-
-                if key in (13, 32):
-                    start_analysis = True
-                elif key == ord('q'):
-                    cap.release()
-                    cv2.destroyAllWindows()
-                    return
-                elif key == 27:
-                    cap.release()
-                    cap = None
-                    break
-
-                try:
-                    visible = cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE)
-                except Exception:
-                    visible = 0
-                if visible < 1:
-                    if cap:
-                        cap.release()
-                    cv2.destroyAllWindows()
-                    return
-
-            if cap is None:
-                continue   # вернуться в меню
-
-            # Сбрасываем позицию видео на начало
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-        else:
-            # ── Экран ожидания: показываем камеру + кнопку START ──────────
-            calib_mouse   = [0, 0]
-            calib_click   = [False]
-
-            def on_calib_mouse(event, x, y, flags, param):
-                calib_mouse[0] = x
-                calib_mouse[1] = y
-                if event == cv2.EVENT_LBUTTONUP:
-                    calib_click[0] = True
-
-            cv2.setMouseCallback(WINDOW_NAME, on_calib_mouse)
-
-            start_calib = False
-            while not start_calib:
-                ret, preview = cap.read()
-                if not ret:
-                    break
-
-                h_p, w_p = preview.shape[:2]
-
-                # Тёмный полупрозрачный оверлей снизу
-                overlay = preview.copy()
-                cv2.rectangle(overlay, (0, h_p - 110), (w_p, h_p), (10, 13, 20), -1)
-                cv2.addWeighted(overlay, 0.75, preview, 0.25, 0, preview)
-
-                # Заголовок
-                title = "CAMERA READY"
-                tw = cv2.getTextSize(title, cv2.FONT_HERSHEY_DUPLEX, 1.0, 2)[0][0]
-                cv2.putText(preview, title, (w_p//2 - tw//2, h_p - 75),
-                            cv2.FONT_HERSHEY_DUPLEX, 1.0, (0, 245, 160), 2, cv2.LINE_AA)
-
-                sub = "Stand in front of camera, then click START CALIBRATION"
-                sw = cv2.getTextSize(sub, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 1)[0][0]
-                cv2.putText(preview, sub, (w_p//2 - sw//2, h_p - 48),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.52, (160, 170, 190), 1, cv2.LINE_AA)
-
-                # Кнопки
-                mx, my = calib_mouse
-                bx1 = w_p//2 - 160; bx2 = w_p//2 + 160
-                by1 = h_p - 42;     by2 = h_p - 6
-                btn_hover = renderer.draw_button(preview, "START CALIBRATION", bx1, by1, bx2, by2, calib_mouse, 'primary')
-                bk_hover  = renderer.draw_button(preview, "< MENU", 10, h_p - 42, 120, h_p - 6, calib_mouse, 'secondary')
-
-                cv2.imshow(WINDOW_NAME, preview)
-                key = cv2.waitKey(1) & 0xFF
-
-                # Клик по кнопкам
-                if calib_click[0]:
-                    calib_click[0] = False
-                    if btn_hover:
-                        start_calib = True
-                    elif bk_hover:
-                        cap.release()
-                        cap = None
-                        break
-
-                # Enter / Space тоже запускает
-                if key in (13, 32):
-                    start_calib = True
-                elif key == ord('q'):
-                    cap.release()
-                    cv2.destroyAllWindows()
-                    return
-                elif key == 27:
-                    cap.release()
-                    cap = None
-                    break   # ESC — назад в меню
-
-                try:
-                    visible = cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE)
-                except Exception:
-                    visible = 0
-                if visible < 1:
-                    cap.release()
-                    cv2.destroyAllWindows()
-                    return
-
-            if not start_calib:
-                if cap is not None:
-                    cap.release()
-                continue   # вернуться в меню
-
-            # ── Запускаем калибровку ──────────────────────────────────────
-            calibrator = Calibrator(detector)
-            thresholds = calibrator.run(cap)
-            SQUAT_UP_ANGLE   = thresholds["up_angle"]
-            SQUAT_DOWN_ANGLE = thresholds["down_angle"]
-
-        print(f"Thresholds - UP: >{SQUAT_UP_ANGLE} | DOWN: <{SQUAT_DOWN_ANGLE}")
-
-        counter              = 0
-        stage                = None
-        min_angle_reached    = 180
-        camera_warning_timer = 0
-        last_cam_deviation   = 0
-        win_w, win_h         = DEFAULT_W, DEFAULT_H
-        go_back_to_menu      = False
-
-        # FPS
-        fps_time    = time.time()
-        fps_counter = 0
-        fps_display = 0
-
-        # ── Мышь ──────────────────────────────────────────────────────────
-        mouse_pos   = [0, 0]
-        mouse_click = [False]
-
-        def on_mouse(event, x, y, flags, param):
-            mouse_pos[0] = x
-            mouse_pos[1] = y
-            if event == cv2.EVENT_LBUTTONUP:
-                mouse_click[0] = True
-
-        cv2.setMouseCallback(WINDOW_NAME, on_mouse)
-
-        # ── Основной цикл обработки ───────────────────────────────────────
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                print("Stream ended.")
-                # ── Экран результатов для видео ───────────────────────────
-                if is_video:
-                    res_mouse = [0, 0]
-                    res_click = [False]
-                    def on_res_mouse(event, x, y, flags, param):
-                        res_mouse[0] = x
-                        res_mouse[1] = y
-                        if event == cv2.EVENT_LBUTTONUP:
-                            res_click[0] = True
-                    cv2.setMouseCallback(WINDOW_NAME, on_res_mouse)
-
-                    # Последний кадр остаётся на экране, добавляем оверлей
-                    result_bg = frame.copy() if frame is not None else np.zeros((DEFAULT_H, DEFAULT_W, 3), dtype=np.uint8)
-
-                    while True:
-                        display = result_bg.copy()
-                        h_r, w_r = display.shape[:2]
-
-                        # Полупрозрачный тёмный оверлей
-                        ov = display.copy()
-                        cv2.rectangle(ov, (0, 0), (w_r, h_r), (10, 13, 20), -1)
-                        cv2.addWeighted(ov, 0.70, display, 0.30, 0, display)
-
-                        # Заголовок
-                        t1 = "ANALYSIS COMPLETE"
-                        tw = cv2.getTextSize(t1, cv2.FONT_HERSHEY_DUPLEX, 1.4, 3)[0][0]
-                        cv2.putText(display, t1, (w_r//2 - tw//2, h_r//2 - 80),
-                                    cv2.FONT_HERSHEY_DUPLEX, 1.4, (0, 245, 160), 3, cv2.LINE_AA)
-
-                        # Счётчик приседаний
-                        t2 = f"{counter} SQUATS"
-                        tw2 = cv2.getTextSize(t2, cv2.FONT_HERSHEY_DUPLEX, 2.5, 4)[0][0]
-                        cv2.putText(display, t2, (w_r//2 - tw2//2, h_r//2 + 10),
-                                    cv2.FONT_HERSHEY_DUPLEX, 2.5, (255, 255, 255), 4, cv2.LINE_AA)
-
-                        # Кнопка BACK TO MENU
-                        bx1 = w_r//2 - 130; bx2 = w_r//2 + 130
-                        by1 = h_r//2 + 50;  by2 = h_r//2 + 92
-                        mx, my = res_mouse
-                        btn_hover = renderer.draw_button(display, "BACK TO MENU", bx1, by1, bx2, by2, res_mouse, 'primary')
-
-                        cv2.imshow(WINDOW_NAME, display)
-                        key = cv2.waitKey(1) & 0xFF
-
-                        if res_click[0]:
-                            res_click[0] = False
-                            if btn_hover:
-                                go_back_to_menu = True
-                                break
-
-                        if key == ord('q'):
-                            cap.release()
-                            cv2.destroyAllWindows()
-                            return
-                        elif key in (13, 32, 27):
-                            go_back_to_menu = True
-                            break
-
-                        try:
-                            visible = cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE)
-                        except Exception:
-                            visible = 0
-                        if visible < 1:
-                            cap.release()
-                            cv2.destroyAllWindows()
-                            return
-                else:
-                    go_back_to_menu = True
+        while self._alive and self._mode == 'analyze':
+            ok, frame = cap.read()
+            if not ok:
+                self.ended.emit(counter)
                 break
 
-            # Для видео — сохраняем пропорции, добавляем letterbox
-            if is_video:
-                frame = letterbox(frame, win_w, win_h)
-
-            results  = detector.process_frame(frame)
+            results     = detector.process_frame(frame)
             detector.draw_skeleton(frame, results)
-
-            leg       = get_best_leg(results)
-            landmarks = detector.get_landmarks(results, frame.shape, leg=leg)
+            current_leg = get_best_leg(results, current_leg)
+            lm          = detector.get_landmarks(results, frame.shape, leg=current_leg)
 
             feedback = "Stand in front of camera"
-            color    = renderer.COLOR_YELLOW
-            angle    = 0
+            fb_color = C['amber']
+            angle    = 0.0
             warnings = []
+            back_ang = 0
+            back_ok  = True
 
-            if landmarks:
-                shoulder = landmarks["shoulder"]
-                hip      = landmarks["hip"]
-                knee     = landmarks["knee"]
-                ankle    = landmarks["ankle"]
+            if lm:
+                raw = calculate_angle_3d(lm['hip_3d'], lm['knee_3d'], lm['ankle_3d'])
+                back_ang = calculate_back_angle(lm['shoulder'], lm['hip'])
+                knee_dev = calculate_knee_deviation_3d(lm['knee_3d'], lm['ankle_3d'], lm['hip_3d'])
+                back_ok  = back_ang <= BACK_LIM
 
-                cam_position, cam_deviation = estimate_camera_angle({
-                    "left_hip_z":  landmarks["left_hip_z"],
-                    "right_hip_z": landmarks["right_hip_z"]
-                })
+                angle_buf.append(raw)
+                if len(angle_buf) > BUF_SIZE:
+                    angle_buf.pop(0)
+                angle = sum(angle_buf) / len(angle_buf)
 
-                if cam_position == "diagonal" and not is_video:
-                    last_cam_deviation   = cam_deviation
-                    camera_warning_timer = CAMERA_WARNING_FRAMES
-
-                angle      = calculate_angle_3d(landmarks["hip_3d"], landmarks["knee_3d"], landmarks["ankle_3d"])
-                back_angle = calculate_back_angle(shoulder, hip)
-                knee_dev   = calculate_knee_deviation_3d(landmarks["knee_3d"], landmarks["ankle_3d"], landmarks["hip_3d"])
-
-                back_is_good = back_angle <= BACK_ANGLE_LIMIT
-
-                if not back_is_good and stage == "DOWN":
-                    warnings.append("! Round back")
-                if knee_dev < -KNEE_DEVIATION_LIMIT and stage == "DOWN":
-                    warnings.append("! Knees caving in")
-
-                if stage == "DOWN":
+                # Всегда отслеживаем минимум пока не в UP
+                if stage != 'UP':
                     min_angle_reached = min(min_angle_reached, angle)
 
-                if angle > SQUAT_UP_ANGLE:
-                    if stage == "DOWN":
-                        if min_angle_reached <= SQUAT_DOWN_ANGLE:
+                if stage == 'DOWN':
+                    if not back_ok:
+                        warnings.append('Round back')
+                    if knee_dev < -KNEE_LIM:
+                        warnings.append('Knees caving in')
+
+                # ── Машина состояний ──────────────────────────────────────
+                if angle > UP_THRESH:
+                    if stage == 'DOWN':
+                        if min_angle_reached <= DN_THRESH:
                             counter += 1
-                            feedback = f"Great! Rep #{counter} counted!"
-                            color    = renderer.COLOR_GREEN
+                            feedback = f"Rep #{counter}!"
+                            fb_color = C['neon']
+                            print(f"[REP] #{counter}  min={min_angle_reached:.1f}  DN={DN_THRESH}")
                         else:
-                            feedback = f"Not deep enough! Min: {int(min_angle_reached)} deg"
-                            color    = renderer.COLOR_RED
-                        min_angle_reached = 180
+                            feedback = f"Go deeper next time ({int(min_angle_reached)}° > {int(DN_THRESH)}°)"
+                            fb_color = C['red']
+                        min_angle_reached = 360.0
                     else:
-                        feedback = "Ready - go down!"
-                        color    = renderer.COLOR_GREEN
-                    stage = "UP"
+                        feedback = "Ready — squat down!"
+                        fb_color = C['neon']
+                    stage = 'UP'
 
-                elif angle < SQUAT_DOWN_ANGLE:
-                    stage    = "DOWN"
-                    feedback = "Great depth - stand up!"
-                    color    = renderer.COLOR_GREEN
+                elif angle < DN_THRESH:
+                    stage    = 'DOWN'
+                    feedback = "Good — stand up!"
+                    fb_color = C['neon']
+
                 else:
-                    if stage == "DOWN":
-                        feedback = f"Lower! Need < {int(SQUAT_DOWN_ANGLE)} deg  Now: {int(angle)} deg"
-                        color    = renderer.COLOR_RED
+                    if stage == 'DOWN':
+                        feedback = f"Stand up!  {int(angle)}° → {int(UP_THRESH)}°"
+                        fb_color = C['neon']
+                    elif stage == 'UP':
+                        feedback = f"Squat down!  {int(angle)}° → {int(DN_THRESH)}°"
+                        fb_color = C['neon']
                     else:
-                        feedback = "Ready - go down!"
-                        color    = renderer.COLOR_GREEN
+                        feedback = "Ready — squat down!"
+                        fb_color = C['neon']
 
-                renderer.draw_joint_lines(frame, hip, knee, ankle, color)
-                renderer.draw_angle(frame, knee, angle, color)
-                renderer.draw_back_angle(frame, back_angle, back_is_good)
-                renderer.draw_angle_bar(frame, angle, SQUAT_UP_ANGLE, SQUAT_DOWN_ANGLE)
+                col_bgr = tuple(int(fb_color.lstrip('#')[i:i+2], 16) for i in (4, 2, 0))
+                renderer.draw_joint_lines(frame, lm['hip'], lm['knee'], lm['ankle'], col_bgr)
+                renderer.draw_angle(frame, lm['knee'], angle, col_bgr)
+            else:
+                angle_buf = []
 
-            btn_menu = renderer.draw_header(frame, counter, stage, mouse_pos)
-            renderer.draw_feedback(frame, feedback, color)
             renderer.draw_form_warnings(frame, warnings)
-            renderer.draw_fps(frame, fps_display)
+            pct = int(max(0, min(100, (UP_THRESH - max(DN_THRESH, min(UP_THRESH, angle))) /
+                                       max(1, UP_THRESH - DN_THRESH) * 100)))
+            fps_n += 1
+            if time.time() - fps_t >= 1.0:
+                fps = fps_n; fps_n = 0; fps_t = time.time()
 
-            if camera_warning_timer > 0:
-                renderer.draw_camera_warning(frame, last_cam_deviation)
-                camera_warning_timer -= 1
-
-            cv2.imshow(WINDOW_NAME, frame)
-
-            # Клик по кнопке Menu
-            if mouse_click[0]:
-                mouse_click[0] = False
-                mx, my = mouse_pos
-                if btn_menu and btn_menu[0] <= mx <= btn_menu[2] and btn_menu[1] <= my <= btn_menu[3]:
-                    go_back_to_menu = True
-                    break
-
-            fps_counter += 1
-            if time.time() - fps_time >= 1.0:
-                fps_display = fps_counter
-                fps_counter = 0
-                fps_time    = time.time()
-
-            key = cv2.waitKey(1) & 0xFF
-
-            if key == ord('q'):
-                cap.release()
-                cv2.destroyAllWindows()
-                return
-            elif key == 27:   # ESC — вернуться в меню
-                go_back_to_menu = True
-                break
-            elif key == ord('f'):
-                toggle_fullscreen()
-            elif key == ord('+') or key == ord('='):
-                win_w = min(win_w + 80, 1920)
-                win_h = min(win_h + 45, 1080)
-                cv2.resizeWindow(WINDOW_NAME, win_w, win_h)
-            elif key == ord('-'):
-                win_w = max(win_w - 80, 640)
-                win_h = max(win_h - 45, 360)
-                cv2.resizeWindow(WINDOW_NAME, win_w, win_h)
-
-            try:
-                visible = cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE)
-            except Exception:
-                visible = 0
-            if visible < 1:
-                cap.release()
-                cv2.destroyAllWindows()
-                return
+            self.analysis_frame.emit(frame)
+            self.hud.emit(counter, stage or '', feedback, fb_color, fps,
+                          int(back_ang), bool(back_ok), warnings, pct)
+            self.msleep(1)
 
         cap.release()
 
-        if not go_back_to_menu:
-            break   # Q или крестик — полный выход
-        # иначе — продолжаем внешний цикл (возврат в меню)
+    def _cal_phase(self, cap, detector, renderer, phase):
+        from angle_calculator import calculate_angle_3d, get_best_leg
+        import numpy as np
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            ok, f = cap.read()
+            if not ok: break
+            renderer.draw_calibration_overlay(f, phase, int(deadline-time.time())+1)
+            self.calib_frame.emit(f)
+            self.msleep(30)
+        angles = []; deadline = time.time() + 2
+        while time.time() < deadline:
+            ok, f = cap.read()
+            if not ok: break
+            res = detector.process_frame(f)
+            leg = get_best_leg(res)
+            lm  = detector.get_landmarks(res, f.shape, leg=leg)
+            a   = None
+            if lm:
+                a = calculate_angle_3d(lm['hip_3d'], lm['knee_3d'], lm['ankle_3d'])
+                angles.append(a)
+            renderer.draw_calibration_overlay(f, phase, 0, a)
+            self.calib_frame.emit(f)
+            self.msleep(30)
+        return float(np.median(angles)) if angles else (160.0 if phase=='UP' else 70.0)
 
-    cv2.destroyAllWindows()
-    print("Workout complete!")
+# ══════════════════════════════════════════════════════════════════════════
+#  ЭКРАНЫ
+# ══════════════════════════════════════════════════════════════════════════
+
+# ── Экран выбора источника ────────────────────────────────────────────────
+class MenuScreen(QWidget):
+    sig_webcam = pyqtSignal()
+    sig_video  = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName('root')
+        self.setStyleSheet(f"background: {C['bg']};")
+
+        # Анимация фона
+        self._tick = 0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._on_tick)
+        self._timer.start(50)
+
+        root = QVBoxLayout(self)
+        root.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        panel = HudPanel(accent=C['neon'], corner=22)
+        panel.setFixedSize(460, 340)
+
+        inner = QVBoxLayout(panel)
+        inner.setContentsMargins(44, 40, 44, 40)
+        inner.setSpacing(0)
+
+        # Заголовок
+        title = neon_label("AI FITNESS COACH", C['neon'], 22)
+        inner.addWidget(title)
+        inner.addSpacing(8)
+
+        sub = muted_label("SELECT INPUT SOURCE", 10)
+        inner.addWidget(sub)
+        inner.addSpacing(20)
+        inner.addWidget(hsep())
+        inner.addSpacing(24)
+
+        btn_w = QPushButton("WEBCAM")
+        btn_w.setStyleSheet(BTN_PRIMARY)
+        btn_w.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_w.clicked.connect(self.sig_webcam.emit)
+        inner.addWidget(btn_w)
+        inner.addSpacing(12)
+
+        btn_v = QPushButton("VIDEO FILE")
+        btn_v.setStyleSheet(BTN_PRIMARY)
+        btn_v.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_v.clicked.connect(self._pick)
+        inner.addWidget(btn_v)
+
+        root.addWidget(panel)
+
+    def _pick(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select video", "",
+            "Video (*.mp4 *.avi *.mov *.mkv *.wmv *.flv);;All (*.*)")
+        if path: self.sig_video.emit(path)
+
+    def _on_tick(self):
+        self._tick = (self._tick + 1) % 400
+        self.update()
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+
+        # Dot grid с лёгкой анимацией дрейфа
+        spacing = 36
+        offset = (self._tick * 0.15) % spacing
+        c_dot = QColor(C['neon'])
+        c_dot.setAlpha(22)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(c_dot))
+        gx = -spacing
+        while gx < w + spacing:
+            gy = -spacing
+            while gy < h + spacing:
+                dx = int(gx + offset)
+                dy = int(gy + offset)
+                p.drawEllipse(QPoint(dx, dy), 1, 1)
+                gy += spacing
+            gx += spacing
+
+        # Угловые акценты экрана
+        cs = 50
+        for width, alpha in [(7, 8), (4, 20), (2, 70)]:
+            ac = QColor(C['neon'])
+            ac.setAlpha(alpha)
+            pen = QPen(ac, width)
+            pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+            p.setPen(pen)
+            segs = [
+                (0, cs, 0, 0, cs, 0),
+                (w-cs, 0, w, 0, w, cs),
+                (0, h-cs, 0, h, cs, h),
+                (w-cs, h, w, h, w, h-cs),
+            ]
+            for x1,y1,mx,my,x2,y2 in segs:
+                p.drawLine(QPoint(x1,y1), QPoint(mx,my))
+                p.drawLine(QPoint(mx,my), QPoint(x2,y2))
+
+        # Тонкие горизонтальные линии
+        for y_frac in [0.25, 0.5, 0.75]:
+            lc = QColor(C['neon'])
+            lc.setAlpha(12)
+            p.setPen(QPen(lc, 1))
+            p.drawLine(0, int(h * y_frac), w, int(h * y_frac))
+
+        p.end()
+
+# ── Экран предпросмотра ───────────────────────────────────────────────────
+class PreviewScreen(QWidget):
+    sig_confirm = pyqtSignal()
+    sig_back    = pyqtSignal()
+
+    def __init__(self, title="CAMERA READY", btn_text="START CALIBRATION"):
+        super().__init__()
+        self.setStyleSheet(f"background: #000;")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0,0,0,0)
+        layout.setSpacing(0)
+
+        self.video = VideoWidget()
+        layout.addWidget(self.video)
+
+        # Нижняя панель
+        bar = QFrame()
+        bar.setFixedHeight(90)
+        bar.setStyleSheet(f"""
+            QFrame {{
+                background: {C['panel']};
+                border-top: 2px solid {C['neon']};
+                border-radius: 0;
+            }}
+        """)
+        bl = QHBoxLayout(bar)
+        bl.setContentsMargins(20, 0, 20, 0)
+        bl.setSpacing(16)
+
+        btn_back = QPushButton("← MENU")
+        btn_back.setStyleSheet(BTN_SECONDARY)
+        btn_back.setFixedWidth(110)
+        btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_back.clicked.connect(self.sig_back.emit)
+
+        info = QVBoxLayout()
+        info.setSpacing(4)
+        self.lbl_title = QLabel(title)
+        self.lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_title.setStyleSheet(f"""
+            color: {C['neon']}; font-family: Consolas, monospace;
+            font-size: 15px; font-weight: 700; letter-spacing: 3px;
+            background: transparent;
+        """)
+        self.lbl_sub = QLabel("Stand in front of camera and click the button")
+        self.lbl_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_sub.setStyleSheet(f"color: {C['muted']}; font-size: 12px; background: transparent;")
+        info.addWidget(self.lbl_title)
+        info.addWidget(self.lbl_sub)
+
+        btn_start = QPushButton(btn_text)
+        btn_start.setStyleSheet(BTN_PRIMARY)
+        btn_start.setMinimumWidth(220)
+        btn_start.setFixedHeight(48)
+        btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_start.clicked.connect(self.sig_confirm.emit)
+
+        bl.addWidget(btn_back)
+        bl.addLayout(info, 1)
+        bl.addWidget(btn_start)
+        layout.addWidget(bar)
+
+    def push(self, frame): self.video.show_frame(frame)
+    def set_sub(self, t):  self.lbl_sub.setText(t)
+    def set_title(self, t): self.lbl_title.setText(t)
+
+# ── Экран анализа ─────────────────────────────────────────────────────────
+class AnalysisScreen(QWidget):
+    sig_menu = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet(f"background: #000;")
+        self._warn_timer = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0,0,0,0)
+        layout.setSpacing(0)
+
+        # ── Шапка ────────────────────────────────────────────────────────
+        header = QFrame()
+        header.setFixedHeight(68)
+        header.setStyleSheet(f"""
+            QFrame {{
+                background: {C['panel']};
+                border-bottom: none;
+                border-radius: 0;
+            }}
+        """)
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(14, 0, 14, 0)
+        hl.setSpacing(14)
+
+        self.btn_menu = QPushButton("MENU")
+        self.btn_menu.setStyleSheet(BTN_MENU)
+        self.btn_menu.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_menu.clicked.connect(self.sig_menu.emit)
+
+        hl.addWidget(self.btn_menu)
+        hl.addWidget(vsep())
+
+        # Лого
+        logo = QVBoxLayout()
+        logo.setSpacing(0)
+        t1 = QLabel("AI FITNESS")
+        t1.setStyleSheet(f"color:{C['muted']}; font-size:9px; letter-spacing:3px; background:transparent;")
+        t2 = QLabel("COACH")
+        t2.setStyleSheet(f"color:{C['neon']}; font-family:Consolas,monospace; font-size:16px; font-weight:700; letter-spacing:3px; background:transparent;")
+        logo.addWidget(t1); logo.addWidget(t2)
+        hl.addLayout(logo)
+        hl.addStretch(1)
+
+        # Счётчик
+        ctr = QVBoxLayout(); ctr.setSpacing(1)
+        lbl_s = QLabel("SQUATS")
+        lbl_s.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_s.setStyleSheet(f"color:{C['muted']}; font-size:9px; letter-spacing:4px; background:transparent;")
+        self.lbl_counter = QLabel("0")
+        self.lbl_counter.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_counter.setStyleSheet(f"color:{C['white']}; font-family:Consolas,monospace; font-size:32px; font-weight:700; background:transparent;")
+        ctr.addWidget(lbl_s); ctr.addWidget(self.lbl_counter)
+        hl.addLayout(ctr)
+        hl.addStretch(1)
+
+        hl.addWidget(vsep())
+
+        # Stage
+        stg = QVBoxLayout(); stg.setSpacing(2)
+        lbl_st = QLabel("STAGE")
+        lbl_st.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_st.setStyleSheet(f"color:{C['muted']}; font-size:9px; letter-spacing:4px; background:transparent;")
+        self.lbl_stage = QLabel("---")
+        self.lbl_stage.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_stage.setStyleSheet(f"color:{C['muted']}; font-family:Consolas,monospace; font-size:18px; font-weight:700; background:transparent;")
+        stg.addWidget(lbl_st); stg.addWidget(self.lbl_stage)
+        hl.addLayout(stg)
+
+        hl.addWidget(vsep())
+        self.lbl_fps = QLabel("-- FPS")
+        self.lbl_fps.setStyleSheet(f"color:{C['muted']}; font-size:10px; font-family:Consolas; background:transparent;")
+        hl.addWidget(self.lbl_fps)
+
+        layout.addWidget(header)
+
+        # ── Видео ─────────────────────────────────────────────────────────
+        self.video = VideoWidget()
+        layout.addWidget(self.video)
+
+        # Depth bar поверх видео (абсолютное позиционирование через overlay)
+        self.depth_bar = QFrame(self.video)
+        self.depth_bar.setGeometry(0, 0, 20, 160)
+        self.depth_fill = QFrame(self.depth_bar)
+        self.depth_fill.setStyleSheet(f"background:{C['neon']}; border-radius:3px;")
+        self.depth_bar.setStyleSheet(f"background:{C['panel']}; border:1px solid {C['border']}; border-radius:4px;")
+
+        # ── Нижняя полоса фидбэка ─────────────────────────────────────────
+        self.fb_bar = QFrame()
+        self.fb_bar.setFixedHeight(52)
+        self._set_fb_style(C['neon'])
+        fb_l = QHBoxLayout(self.fb_bar)
+        fb_l.setContentsMargins(18, 0, 18, 0)
+        fb_l.setSpacing(12)
+
+        self.fb_dot = QLabel("●")
+        self.fb_dot.setStyleSheet(f"color:{C['neon']}; font-size:10px; background:transparent;")
+        self.fb_text = QLabel("Stand in front of camera")
+        self.fb_text.setStyleSheet(f"color:{C['neon']}; font-size:14px; font-weight:600; background:transparent;")
+        fb_l.addWidget(self.fb_dot)
+        fb_l.addWidget(self.fb_text)
+        fb_l.addStretch()
+
+        self.lbl_back = QLabel()
+        self.lbl_back.setStyleSheet(f"color:{C['muted']}; font-size:11px; font-family:Consolas; background:transparent;")
+        fb_l.addWidget(self.lbl_back)
+
+        layout.addWidget(self.fb_bar)
+
+    def _set_fb_style(self, color):
+        self.fb_bar.setStyleSheet(f"""
+            QFrame {{
+                background: {C['panel']};
+                border-top: 2px solid {color};
+                border-radius: 0;
+            }}
+        """)
+
+    def push(self, frame):
+        self.video.show_frame(frame)
+
+    def reset(self):
+        self.lbl_counter.setText("0")
+        self.lbl_stage.setText("---")
+        self.lbl_stage.setStyleSheet(f"color:{C['muted']}; font-family:Consolas,monospace; font-size:18px; font-weight:700; background:transparent;")
+        self.fb_text.setText("Stand in front of camera")
+        self.lbl_fps.setText("-- FPS")
+        # Прячем оверлей завершения если остался с прошлого раза
+        if hasattr(self, "_fin_overlay"):
+            self._fin_overlay.hide()
+
+    def update_hud(self, counter, stage, feedback, color, fps, back_ang, back_ok, warnings):
+        self.lbl_counter.setText(str(counter))
+        self.lbl_fps.setText(f"{fps} FPS")
+
+        sc = C['neon'] if stage=='UP' else (C['neon2'] if stage=='DOWN' else C['muted'])
+        self.lbl_stage.setText(stage or '---')
+        self.lbl_stage.setStyleSheet(f"color:{sc}; font-family:Consolas,monospace; font-size:18px; font-weight:700; background:transparent;")
+
+        self.fb_text.setText(feedback)
+        self.fb_text.setStyleSheet(f"color:{color}; font-size:14px; font-weight:600; background:transparent;")
+        self.fb_dot.setStyleSheet(f"color:{color}; font-size:10px; background:transparent;")
+        self._set_fb_style(color)
+
+        back_color = C['neon'] if back_ok else C['red']
+        self.lbl_back.setText(f"BACK  {back_ang}°  {'✓' if back_ok else '!'}")
+        self.lbl_back.setStyleSheet(f"color:{back_color}; font-size:11px; font-family:Consolas; background:transparent;")
+
+    def set_depth(self, pct):
+        bh  = self.depth_bar.height()
+        fh  = int(bh * pct / 100)
+        col = C["neon"] if pct>=95 else (C["amber"] if pct>50 else C["red"])
+        self.depth_fill.setGeometry(1, bh-fh, 12, fh)
+        self.depth_fill.setStyleSheet(f"background:{col}; border-radius:2px;")
+
+    def show_finished(self, count):
+        """Показывает оверлей поверх последнего кадра — окно НЕ закрывается."""
+        if not hasattr(self, "_fin_overlay"):
+            ov = QFrame(self)
+            ov.setStyleSheet("background: rgba(6,10,14,210);")
+            ov.hide()
+
+            inner = QVBoxLayout(ov)
+            inner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            inner.setSpacing(14)
+
+            t1 = neon_label("ANALYSIS COMPLETE", C["neon"], 14)
+            inner.addWidget(t1)
+
+            line = QFrame(); line.setFrameShape(QFrame.Shape.HLine)
+            line.setStyleSheet(f"color:{C['border2']}; background:{C['border2']}; max-height:1px;")
+            inner.addWidget(line)
+            inner.addSpacing(8)
+
+            lbl_sub = muted_label("SQUATS PERFORMED", 10)
+            inner.addWidget(lbl_sub)
+
+            self._fin_count = QLabel("0")
+            self._fin_count.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._fin_count.setStyleSheet(
+                f"color:{C['white']}; font-family:Consolas,monospace; "
+                f"font-size:96px; font-weight:700; background:transparent;"
+            )
+            inner.addWidget(self._fin_count)
+            inner.addSpacing(8)
+
+            btn = QPushButton("BACK TO MENU")
+            btn.setStyleSheet(BTN_PRIMARY)
+            btn.setFixedWidth(260)
+            btn.setFixedHeight(50)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(self.sig_menu.emit)
+            inner.addWidget(btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+            self._fin_overlay = ov
+
+        self._fin_count.setText(str(count))
+        self._fin_overlay.setGeometry(self.rect())
+        self._fin_overlay.show()
+        self._fin_overlay.raise_()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        vh = self.video.height()
+        bh = min(180, vh - 20)
+        self.depth_bar.setGeometry(self.video.width() - 22, (vh - bh)//2, 14, bh)
+        if hasattr(self, "_fin_overlay") and self._fin_overlay.isVisible():
+            self._fin_overlay.setGeometry(self.rect())
+
+# ── Экран результатов ─────────────────────────────────────────────────────
+class ResultsScreen(QWidget):
+    sig_menu = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet(f"background:{C['bg']};")
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        panel = HudPanel(accent=C['neon'], corner=22)
+        panel.setFixedSize(400, 300)
+        inner = QVBoxLayout(panel)
+        inner.setContentsMargins(44, 40, 44, 40)
+        inner.setSpacing(8)
+
+        inner.addWidget(neon_label("ANALYSIS COMPLETE", C['neon'], 14))
+        inner.addWidget(hsep())
+        inner.addSpacing(12)
+        inner.addWidget(muted_label("SQUATS PERFORMED", 10))
+
+        self.count_lbl = QLabel("0")
+        self.count_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.count_lbl.setStyleSheet(f"color:{C['white']}; font-family:Consolas,monospace; font-size:72px; font-weight:700; background:transparent;")
+        inner.addWidget(self.count_lbl)
+
+        inner.addSpacing(8)
+        btn = QPushButton("BACK TO MENU")
+        btn.setStyleSheet(BTN_PRIMARY)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(self.sig_menu.emit)
+        inner.addWidget(btn)
+        layout.addWidget(panel)
+
+    def set_count(self, n): self.count_lbl.setText(str(n))
+
+# ── Калибровочный оверлей ─────────────────────────────────────────────────
+class CalibOverlay(QWidget):
+    """Полноэкранный оверлей поверх analysis screen во время калибровки."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setStyleSheet(f"background: rgba(6,10,14,220);")
+        self.hide()
+
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(16)
+
+        self.lbl_step = muted_label("STEP 1 OF 2", 10)
+        layout.addWidget(self.lbl_step)
+
+        self.lbl_inst = neon_label("STAND STRAIGHT", C['neon'], 36)
+        layout.addWidget(self.lbl_inst)
+        layout.addSpacing(8)
+
+        # Видео в рамке
+        frame = HudPanel(accent=C['neon'], corner=16)
+        frame.setFixedSize(640, 360)
+        fv = QVBoxLayout(frame)
+        fv.setContentsMargins(2, 2, 2, 2)
+        self.video = VideoWidget()
+        fv.addWidget(self.video)
+        layout.addWidget(frame)
+
+    def show_frame(self, bgr): self.video.show_frame(bgr)
+    def set_phase(self, phase):
+        self.lbl_inst.setText("STAND STRAIGHT" if phase == "UP" else "SQUAT DOWN")
+        self.lbl_step.setText("STEP 1 OF 2" if phase == "UP" else "STEP 2 OF 2")
+        color = C['neon'] if phase == "UP" else C['neon2']
+        self.lbl_inst.setStyleSheet(f"""
+            color:{color}; font-family:Consolas,monospace;
+            font-size:36px; font-weight:700; letter-spacing:4px; background:transparent;
+        """)
+
+# ══════════════════════════════════════════════════════════════════════════
+#  ГЛАВНОЕ ОКНО
+# ══════════════════════════════════════════════════════════════════════════
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("AI Fitness Coach")
+        self.resize(1280, 720)
+        self.setMinimumSize(800, 500)
+        self.setStyleSheet(GLOBAL_STYLE)
+
+        self._worker = None
+        self._source = None
+
+        self._stack   = QStackedWidget()
+        self.setCentralWidget(self._stack)
+
+        self._menu    = MenuScreen()
+        self._preview = PreviewScreen()
+        self._analysis= AnalysisScreen()
+        self._results = ResultsScreen()
+
+        self._stack.addWidget(self._menu)     # 0
+        self._stack.addWidget(self._preview)  # 1
+        self._stack.addWidget(self._analysis) # 2
+        self._stack.addWidget(self._results)  # 3
+
+        self._calib_overlay = CalibOverlay(self._analysis)
+
+        # Сигналы
+        self._menu.sig_webcam.connect(lambda: self._start('webcam', ''))
+        self._menu.sig_video.connect(lambda p: self._start('video', p))
+        self._preview.sig_confirm.connect(self._on_confirm)
+        self._preview.sig_back.connect(self._go_menu)
+        self._analysis.sig_menu.connect(self._go_menu)
+        self._results.sig_menu.connect(self._go_menu)
+
+        self._stack.setCurrentIndex(0)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._calib_overlay.setGeometry(self._analysis.rect())
+
+    # ── Навигация ─────────────────────────────────────────────────────────
+    def _start(self, source, path):
+        self._source = source
+        fname = os.path.basename(path) if path else ""
+
+        # Пересоздаём preview с правильным текстом
+        old = self._stack.widget(1)
+        if source == 'webcam':
+            self._preview = PreviewScreen("CAMERA READY", "START CALIBRATION")
+        else:
+            self._preview = PreviewScreen("VIDEO LOADED", "START ANALYSIS")
+            self._preview.set_sub(fname)
+
+        self._preview.sig_confirm.connect(self._on_confirm)
+        self._preview.sig_back.connect(self._go_menu)
+        self._stack.insertWidget(1, self._preview)
+        self._stack.removeWidget(old)
+
+        # Запускаем поток
+        self._stop_worker()
+        self._worker = Worker()
+        self._worker.setup(source, path)
+        self._worker.preview_frame.connect(self._preview.push)
+        self._worker.calib_frame.connect(self._on_calib_frame)
+        self._worker.calib_done.connect(self._on_calib_done)
+        self._worker.analysis_frame.connect(self._analysis.push)
+        self._worker.hud.connect(self._on_hud)
+        self._worker.ended.connect(self._on_ended)
+        self._worker.go_preview()
+        self._worker.start()
+
+        self._stack.setCurrentWidget(self._preview)
+
+    def _on_confirm(self):
+        self._analysis.reset()
+        self._stack.setCurrentWidget(self._analysis)
+        if self._source == 'webcam':
+            self._calib_overlay.show()
+            self._calib_overlay.setGeometry(self._analysis.rect())
+            self._worker.go_calibrate()
+        else:
+            self._worker.go_analyze()
+
+    def _go_menu(self):
+        self._calib_overlay.hide()
+        self._stop_worker()
+        self._stack.setCurrentWidget(self._menu)
+
+    # ── Слоты ─────────────────────────────────────────────────────────────
+    def _on_calib_frame(self, f):
+        self._calib_overlay.show_frame(f)
+
+    def _on_calib_done(self, up, dn):
+        self._calib_overlay.hide()
+        self._worker.go_analyze(up, dn)
+
+    def _on_hud(self, counter, stage, feedback, color, fps, back_ang, back_ok, warnings, pct):
+        self._analysis.update_hud(counter, stage, feedback, color, fps, back_ang, back_ok, warnings)
+        self._analysis.set_depth(pct)
+
+    def _on_ended(self, counter):
+        self._stop_worker()
+        self._analysis.show_finished(counter)
+    def _stop_worker(self):
+        if self._worker:
+            self._worker.stop()
+            self._worker = None
+
+    def closeEvent(self, e):
+        self._stop_worker(); super().closeEvent(e)
+
+    def keyPressEvent(self, e):
+        k = e.key()
+        if k == Qt.Key.Key_Escape:
+            self._go_menu()
+        elif k in (Qt.Key.Key_F11, Qt.Key.Key_F):
+            if self.isFullScreen(): self.showNormal()
+            else: self.showFullScreen()
+
+
+# ── Запуск ────────────────────────────────────────────────────────────────
+def main():
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window,      QColor(C['bg']))
+    palette.setColor(QPalette.ColorRole.WindowText,  QColor(C['white']))
+    palette.setColor(QPalette.ColorRole.Base,        QColor(C['panel']))
+    palette.setColor(QPalette.ColorRole.Button,      QColor(C['panel2']))
+    palette.setColor(QPalette.ColorRole.ButtonText,  QColor(C['white']))
+    app.setPalette(palette)
+
+    win = MainWindow()
+    win.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

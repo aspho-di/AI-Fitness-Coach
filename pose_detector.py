@@ -32,13 +32,20 @@ class PoseDetector:
             min_pose_detection_confidence=detection_confidence,
             min_tracking_confidence=tracking_confidence
         )
-        self.landmarker = vision.PoseLandmarker.create_from_options(options)
-        self.frame_index = 0
+        self.landmarker    = vision.PoseLandmarker.create_from_options(options)
+        self.frame_index   = 0
+        self._ms_per_frame = 33.333  # default 30 fps; override via set_fps()
+
+    def set_fps(self, fps: float):
+        """Устанавливает реальный fps источника чтобы таймстемпы были точными."""
+        if fps and fps > 0:
+            self._ms_per_frame = 1000.0 / fps
 
     def process_frame(self, frame):
         rgb_frame    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image     = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-        timestamp_ms = self.frame_index * 33
+        # Таймстемп строго монотонен и отражает реальный интервал между кадрами
+        timestamp_ms = int(self.frame_index * self._ms_per_frame)
         self.frame_index += 1
         return self.landmarker.detect_for_video(mp_image, timestamp_ms)
 

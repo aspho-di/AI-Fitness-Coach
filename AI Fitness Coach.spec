@@ -29,7 +29,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='AI_Fitness_Coach',
+    name='AI Fitness Coach',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

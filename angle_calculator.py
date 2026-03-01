@@ -56,6 +56,29 @@ def calculate_back_angle(shoulder, hip):
     return round(angle, 2)
 
 
+def calculate_back_angle_3d(shoulder_3d, hip_3d):
+    """
+    Вычисляет угол наклона спины относительно вертикали в 3D.
+    Точно работает при любом положении камеры, включая диагональную.
+    0 градусов = идеально прямая спина.
+    """
+    shoulder = np.array(shoulder_3d)
+    hip      = np.array(hip_3d)
+
+    vector   = shoulder - hip
+    vertical = np.array([0, -1, 0])  # вертикаль в MediaPipe 3D-пространстве (Y вниз)
+
+    norm = np.linalg.norm(vector)
+    if norm < 1e-6:
+        return 0.0
+
+    cos_angle = np.dot(vector, vertical) / norm
+    cos_angle = np.clip(cos_angle, -1.0, 1.0)
+    angle     = np.degrees(np.arccos(cos_angle))
+
+    return round(angle, 2)
+
+
 def calculate_knee_deviation_3d(knee_3d, ankle_3d, hip_3d):
     """
     Вычисляет завал колена внутрь используя 3D координаты.
@@ -111,12 +134,14 @@ def estimate_camera_angle(landmarks_3d):
     return position, camera_angle
 
 
-def get_best_leg(results):
+def get_best_leg(results, current_leg: str = "left", switch_threshold: float = 0.15) -> str:
     """
     Определяет какая нога видна лучше по visibility суставов.
+    switch_threshold — минимальная разница чтобы переключить ногу.
+    Предотвращает прыжки между ногами при схожей видимости.
     """
     if not results.pose_landmarks or len(results.pose_landmarks) == 0:
-        return "left"
+        return current_leg
 
     landmarks = results.pose_landmarks[0]
 
@@ -132,4 +157,7 @@ def get_best_leg(results):
         landmarks[28].visibility
     ) / 3
 
-    return "left" if left_visibility >= right_visibility else "right"
+    if current_leg == "left":
+        return "right" if right_visibility > left_visibility + switch_threshold else "left"
+    else:
+        return "left" if left_visibility > right_visibility + switch_threshold else "right"

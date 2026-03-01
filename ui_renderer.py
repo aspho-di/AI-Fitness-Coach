@@ -1,348 +1,362 @@
 import cv2
 import numpy as np
+import math
 
 
 class UIRenderer:
-    """
-    Класс для отрисовки современного HUD интерфейса на кадре.
-    Минималистичный спортивный дизайн с чёткими линиями.
-    """
+    C_BG        = (6,   10,  14)
+    C_BG2       = (10,  18,  22)
+    C_PANEL     = (8,   16,  20)
+    C_NEON      = (180, 230, 0)
+    C_NEON_DIM  = (60,  110, 0)
+    C_NEON_GLOW = (100, 180, 20)
+    C_BLUE      = (255, 180, 40)
+    C_RED       = (40,   40, 220)
+    C_AMBER     = (0,   180, 255)
+    C_WHITE     = (220, 230, 240)
+    C_MUTED     = (80,  100, 110)
+    C_DIM       = (28,   38,  45)
+    C_BORDER    = (30,   50,  55)
 
-    # ── Цветовая палитра ───────────────────────────────────────────────────
-    COLOR_GREEN   = (0, 255, 140)
-    COLOR_RED     = (50, 60, 255)
-    COLOR_WHITE   = (255, 255, 255)
-    COLOR_YELLOW  = (0, 220, 255)
-    COLOR_ORANGE  = (0, 165, 255)
-    COLOR_DARK    = (12, 15, 22)
-    COLOR_BLUE    = (255, 180, 0)
-    COLOR_ACCENT  = (0, 245, 160)
-    COLOR_MUTED   = (100, 110, 130)
-    COLOR_BG      = (10, 13, 20)
+    COLOR_GREEN  = C_NEON
+    COLOR_RED    = C_RED
+    COLOR_WHITE  = C_WHITE
+    COLOR_YELLOW = C_AMBER
+    COLOR_ORANGE = (0, 165, 255)
+    COLOR_DARK   = C_BG
+    COLOR_BLUE   = C_BLUE
+    COLOR_ACCENT = C_NEON
+    COLOR_MUTED  = C_MUTED
+    COLOR_BG     = C_BG
 
     FONT_MONO  = cv2.FONT_HERSHEY_DUPLEX
     FONT_PLAIN = cv2.FONT_HERSHEY_SIMPLEX
 
+    def _blend(self, frame, overlay, alpha):
+        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+    def _fill_rect(self, frame, x1, y1, x2, y2, color, alpha=1.0):
+        if alpha >= 1.0:
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, -1)
+        else:
+            ov = frame.copy()
+            cv2.rectangle(ov, (x1, y1), (x2, y2), color, -1)
+            self._blend(frame, ov, alpha)
+
+    def _glow_line(self, frame, p1, p2, color, thickness=1, glow_layers=3):
+        for i in range(glow_layers, 0, -1):
+            ov = frame.copy()
+            cv2.line(ov, p1, p2, color, thickness + i * 2, cv2.LINE_AA)
+            self._blend(frame, ov, 0.10 * i)
+        cv2.line(frame, p1, p2, color, thickness, cv2.LINE_AA)
+
+    def _glow_rect(self, frame, x1, y1, x2, y2, color, thickness=1, glow=3):
+        for i in range(glow, 0, -1):
+            ov = frame.copy()
+            cv2.rectangle(ov, (x1 - i, y1 - i), (x2 + i, y2 + i), color, thickness + i * 2)
+            self._blend(frame, ov, 0.08 * i)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+
+    def _corner_hud(self, frame, x1, y1, x2, y2, color, size=18, thick=2, glow=True):
+        segs = [
+            [(x1, y1 + size), (x1, y1), (x1 + size, y1)],
+            [(x2 - size, y1), (x2, y1), (x2, y1 + size)],
+            [(x1, y2 - size), (x1, y2), (x1 + size, y2)],
+            [(x2 - size, y2), (x2, y2), (x2, y2 - size)],
+        ]
+        for pts in segs:
+            arr = np.array(pts)
+            if glow:
+                for gi in range(3, 0, -1):
+                    ov = frame.copy()
+                    cv2.polylines(ov, [arr], False, color, thick + gi * 2, cv2.LINE_AA)
+                    self._blend(frame, ov, 0.07 * gi)
+            cv2.polylines(frame, [arr], False, color, thick, cv2.LINE_AA)
+
+    def _scanlines(self, frame, y1, y2, x1=0, x2=None, alpha=0.06):
+        if x2 is None:
+            x2 = frame.shape[1]
+        ov = frame.copy()
+        for y in range(y1, y2, 4):
+            cv2.line(ov, (x1, y), (x2, y), (0, 0, 0), 1)
+        self._blend(frame, ov, alpha)
+
+    def _dot_grid(self, frame, x1, y1, x2, y2, spacing=28, alpha=0.45):
+        ov = frame.copy()
+        for gx in range(x1, x2, spacing):
+            for gy in range(y1, y2, spacing):
+                cv2.circle(ov, (gx, gy), 1, self.C_NEON_DIM, -1)
+        self._blend(frame, ov, alpha)
+
+    def _text(self, frame, text, x, y, font=None, scale=0.6, color=None, thick=1, shadow=True):
+        if font  is None: font  = self.FONT_PLAIN
+        if color is None: color = self.C_WHITE
+        if shadow:
+            cv2.putText(frame, text, (x + 1, y + 1), font, scale, (0,0,0), thick + 1, cv2.LINE_AA)
+        cv2.putText(frame, text, (x, y), font, scale, color, thick, cv2.LINE_AA)
+
+    def _text_c(self, frame, text, cx, y, font=None, scale=0.6, color=None, thick=1):
+        if font  is None: font  = self.FONT_PLAIN
+        if color is None: color = self.C_WHITE
+        tw = cv2.getTextSize(text, font, scale, thick)[0][0]
+        self._text(frame, text, cx - tw // 2, y, font, scale, color, thick)
+
     def _draw_rounded_rect(self, frame, x1, y1, x2, y2, color, alpha=0.75, radius=6):
-        """Полупрозрачный прямоугольник с закруглёнными углами."""
-        overlay = frame.copy()
-        # Рисуем заполненный прямоугольник
-        cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
-        # Скруглённые углы через круги
-        for cx, cy in [(x1+radius, y1+radius), (x2-radius, y1+radius),
-                       (x1+radius, y2-radius), (x2-radius, y2-radius)]:
-            cv2.circle(overlay, (cx, cy), radius, color, -1)
-        cv2.addWeighted(overlay, alpha, frame, 1-alpha, 0, frame)
+        self._fill_rect(frame, x1, y1, x2, y2, color, alpha)
 
     def _draw_outlined_text(self, frame, text, pos, font, scale, color, thickness=2):
-        """Текст с тонкой тёмной обводкой для читаемости на любом фоне."""
-        x, y = pos
-        cv2.putText(frame, text, (x+1, y+1), font, scale, (0, 0, 0), thickness+2, cv2.LINE_AA)
-        cv2.putText(frame, text, pos, font, scale, color, thickness, cv2.LINE_AA)
+        self._text(frame, text, pos[0], pos[1], font, scale, color, thickness)
 
     def _draw_accent_line(self, frame, x1, y, x2, color=None):
-        """Тонкая акцентная линия-разделитель."""
-        if color is None:
-            color = self.COLOR_ACCENT
-        cv2.line(frame, (x1, y), (x2, y), color, 1, cv2.LINE_AA)
+        self._glow_line(frame, (x1, y), (x2, y), color or self.C_NEON, 1, 2)
 
-    # ── Основные элементы ─────────────────────────────────────────────────
+    # ── Кнопка ────────────────────────────────────────────────────────────
 
     def draw_button(self, frame, label, x1, y1, x2, y2, mouse_pos=None, style='primary'):
-        """
-        Универсальная кнопка. style: 'primary' (зелёная) или 'secondary' (серая).
-        Возвращает True если курсор над кнопкой.
-        """
         mx, my = (mouse_pos[0], mouse_pos[1]) if mouse_pos else (-1, -1)
         hover  = x1 <= mx <= x2 and y1 <= my <= y2
 
         if style == 'primary':
-            bg_n  = (0, 45, 28)
-            bg_h  = (0, 75, 48)
-            brd_n = (0, 160, 90)
-            brd_h = (0, 245, 140)
-            txt_n = (0, 200, 110)
-            txt_h = (0, 245, 140)
-        else:  # secondary
-            bg_n  = (22, 24, 32)
-            bg_h  = (35, 38, 52)
-            brd_n = (70, 75, 95)
-            brd_h = (130, 140, 170)
-            txt_n = (130, 140, 160)
-            txt_h = (200, 210, 230)
+            bg_col  = (0, 45, 30) if hover else (0, 28, 18)
+            brd_col = self.C_NEON if hover else self.C_NEON_DIM
+            txt_col = self.C_NEON
+            glow_l  = 3 if hover else 1
+        else:
+            bg_col  = (20, 30, 35)   if hover else (12, 18, 22)
+            brd_col = (100,140,140)  if hover else (40, 60, 65)
+            txt_col = (140,180,180)  if hover else (70,100,105)
+            glow_l  = 2 if hover else 0
 
-        bg  = bg_h  if hover else bg_n
-        brd = brd_h if hover else brd_n
-        txt = txt_h if hover else txt_n
+        self._fill_rect(frame, x1, y1, x2, y2, bg_col, alpha=0.93)
+        self._glow_rect(frame, x1, y1, x2, y2, brd_col, 1 if not hover else 2, glow_l)
+        self._corner_hud(frame, x1, y1, x2, y2, brd_col, size=8, thick=1, glow=False)
 
-        # Фон
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (x1, y1), (x2, y2), bg, -1)
-        cv2.addWeighted(overlay, 0.92, frame, 0.08, 0, frame)
-        # Рамка
-        cv2.rectangle(frame, (x1, y1), (x2, y2), brd, 2 if hover else 1)
-
-        # Текст по центру кнопки
         scale = 0.72
         tw, th = cv2.getTextSize(label, self.FONT_MONO, scale, 2)[0]
         tx = x1 + (x2 - x1) // 2 - tw // 2
         ty = y1 + (y2 - y1) // 2 + th // 2
-        cv2.putText(frame, label, (tx, ty), self.FONT_MONO, scale, txt, 2, cv2.LINE_AA)
-
+        self._text(frame, label, tx, ty, self.FONT_MONO, scale, txt_col, 2)
         return hover
 
+    # ── Скелет ────────────────────────────────────────────────────────────
+
     def draw_joint_lines(self, frame, hip, knee, ankle, color):
-        """Рисует сегменты ноги с градиентным эффектом через несколько линий."""
-        # Основные линии
-        cv2.line(frame, tuple(hip),   tuple(knee),  color, 3, cv2.LINE_AA)
-        cv2.line(frame, tuple(knee),  tuple(ankle), color, 3, cv2.LINE_AA)
-        # Внешние суставы — белые кольца
+        cv2.line(frame, tuple(hip),  tuple(knee),  color, 2, cv2.LINE_AA)
+        cv2.line(frame, tuple(knee), tuple(ankle), color, 2, cv2.LINE_AA)
         for pt in [tuple(hip), tuple(ankle)]:
-            cv2.circle(frame, pt, 9, (30, 35, 45), -1)
-            cv2.circle(frame, pt, 9, (80, 90, 110), 2, cv2.LINE_AA)
-            cv2.circle(frame, pt, 4, self.COLOR_WHITE, -1, cv2.LINE_AA)
-        # Колено — акцентный цвет
-        cv2.circle(frame, tuple(knee), 11, (20, 25, 35), -1)
-        cv2.circle(frame, tuple(knee), 11, color, 2, cv2.LINE_AA)
-        cv2.circle(frame, tuple(knee), 5, color, -1, cv2.LINE_AA)
+            cv2.circle(frame, pt, 7, self.C_BG, -1)
+            cv2.circle(frame, pt, 7, self.C_BORDER, 1, cv2.LINE_AA)
+            cv2.circle(frame, pt, 3, self.C_WHITE, -1, cv2.LINE_AA)
+        kx, ky = tuple(knee)
+        d = np.array([[kx,ky-10],[kx+8,ky],[kx,ky+10],[kx-8,ky]], dtype=np.int32)
+        cv2.fillPoly(frame, [d], self.C_BG)
+        cv2.polylines(frame, [d], True, color, 2, cv2.LINE_AA)
+        cv2.circle(frame, (kx, ky), 3, color, -1, cv2.LINE_AA)
 
     def draw_angle(self, frame, knee, angle, color):
-        """Угол у колена с красивым фоном."""
-        text = f"{int(angle)} deg"
-        x, y = knee[0] + 18, knee[1] - 5
-        tw, th = cv2.getTextSize(text, self.FONT_MONO, 0.75, 2)[0]
-        self._draw_rounded_rect(frame, x-6, y-th-4, x+tw+6, y+6, self.COLOR_BG, alpha=0.7)
-        self._draw_outlined_text(frame, text, (x, y), self.FONT_MONO, 0.75, color, 2)
+        text = f"{int(angle)}"
+        x, y = knee[0] + 16, knee[1] - 8
+        tw, th = cv2.getTextSize(text, self.FONT_MONO, 0.7, 2)[0]
+        self._fill_rect(frame, x-4, y-th-2, x+tw+8, y+4, self.C_PANEL, 0.85)
+        cv2.rectangle(frame, (x-4, y-th-2), (x+tw+8, y+4), self.C_NEON_DIM, 1)
+        self._text(frame, text, x, y, self.FONT_MONO, 0.7, color, 2)
+
+    # ── Шапка ─────────────────────────────────────────────────────────────
 
     def draw_header(self, frame, counter, stage, mouse_pos=None):
-        """Верхняя панель с основной информацией. Возвращает rect кнопки Menu."""
         h, w, _ = frame.shape
+        self._fill_rect(frame, 0, 0, w, 72, self.C_PANEL, alpha=0.92)
+        self._scanlines(frame, 0, 72, alpha=0.08)
+        self._glow_line(frame, (0, 72), (w, 72), self.C_NEON, 1, 2)
 
-        # Фон шапки
-        self._draw_rounded_rect(frame, 0, 0, w, 72, self.COLOR_BG, alpha=0.85)
-        self._draw_accent_line(frame, 0, 72, w)
-
-        # ── Кнопка MENU слева ─────────────────────────────────────────────
-        btn_x1, btn_y1, btn_x2, btn_y2 = 10, 10, 110, 62
+        btn_x1, btn_y1, btn_x2, btn_y2 = 10, 10, 108, 62
         self.draw_button(frame, "MENU", btn_x1, btn_y1, btn_x2, btn_y2, mouse_pos, 'secondary')
+        cv2.line(frame, (118,10), (118,62), self.C_DIM, 1, cv2.LINE_AA)
+        self._text(frame, "AI FITNESS", 128, 28, self.FONT_PLAIN, 0.46, self.C_MUTED, 1, shadow=False)
+        self._text(frame, "COACH",      128, 54, self.FONT_MONO,  0.72, self.C_NEON, 2)
 
-        # Счётчик по центру
-        count_text = str(counter)
-        ctw = cv2.getTextSize(count_text, self.FONT_MONO, 2.2, 3)[0][0]
-        cx  = w // 2 - ctw // 2
+        lw = cv2.getTextSize("SQUATS", self.FONT_PLAIN, 0.42, 1)[0][0]
+        cv2.putText(frame, "SQUATS", (w//2 - lw//2, 16), self.FONT_PLAIN, 0.42, self.C_MUTED, 1, cv2.LINE_AA)
+        cstr = str(counter)
+        # Уменьшаем масштаб при 3+ цифрах чтобы счётчик всегда помещался в шапку
+        c_scale = 2.4 if len(cstr) <= 2 else (1.9 if len(cstr) == 3 else 1.5)
+        c_thick = 3
+        (cw, ch), baseline = cv2.getTextSize(cstr, self.FONT_MONO, c_scale, c_thick)
+        # Центрируем по вертикали между строкой "SQUATS" (y≈16) и нижней границей шапки (y=72)
+        cy = 20 + (52 + ch) // 2
+        cy = min(cy, 68)  # не выходим за нижнюю границу шапки
+        self._text(frame, cstr, w//2 - cw//2, cy, self.FONT_MONO, c_scale, self.C_WHITE, c_thick)
 
-        label_text = "SQUATS"
-        ltw = cv2.getTextSize(label_text, self.FONT_PLAIN, 0.45, 1)[0][0]
-        cv2.putText(frame, label_text, (w//2 - ltw//2, 20), self.FONT_PLAIN, 0.45, self.COLOR_MUTED, 1, cv2.LINE_AA)
-        self._draw_outlined_text(frame, count_text, (cx, 62), self.FONT_MONO, 2.2, self.COLOR_WHITE, 3)
-
-        # Stage справа
-        stage_text  = stage if stage else "---"
-        stage_color = self.COLOR_GREEN if stage == "UP" else (self.COLOR_BLUE if stage == "DOWN" else self.COLOR_MUTED)
-
-        stw = cv2.getTextSize(stage_text, self.FONT_MONO, 1.0, 2)[0][0]
-        sx  = w - stw - 20
-
-        cv2.putText(frame, "STAGE", (w - 80, 20), self.FONT_PLAIN, 0.45, self.COLOR_MUTED, 1, cv2.LINE_AA)
-
-        # Фон стейджа
-        self._draw_rounded_rect(frame, sx-8, 28, w-8, 66, stage_color, alpha=0.15)
-        cv2.rectangle(frame, (sx-8, 28), (w-8, 66), stage_color, 1)
-        self._draw_outlined_text(frame, stage_text, (sx, 60), self.FONT_MONO, 1.0, stage_color, 2)
-
+        cv2.line(frame, (w-160,10), (w-160,62), self.C_DIM, 1, cv2.LINE_AA)
+        stage_txt   = stage or "---"
+        stage_color = (self.C_NEON if stage == "UP" else self.C_BLUE if stage == "DOWN" else self.C_MUTED)
+        cv2.putText(frame, "STAGE", (w-148,18), self.FONT_PLAIN, 0.42, self.C_MUTED, 1, cv2.LINE_AA)
+        if stage:
+            self._fill_rect(frame, w-148, 22, w-8, 62, stage_color, alpha=0.10)
+            self._glow_rect(frame, w-148, 22, w-8, 62, stage_color, 1, glow=2)
+        sw = cv2.getTextSize(stage_txt, self.FONT_MONO, 1.05, 2)[0][0]
+        self._text(frame, stage_txt, w-78-sw//2, 58, self.FONT_MONO, 1.05, stage_color, 2)
         return (btn_x1, btn_y1, btn_x2, btn_y2)
 
+    # ── Фидбэк ────────────────────────────────────────────────────────────
+
     def draw_feedback(self, frame, feedback, color):
-        """Нижняя полоса с фидбэком."""
         h, w, _ = frame.shape
+        self._fill_rect(frame, 0, h-52, w, h, self.C_PANEL, alpha=0.92)
+        self._glow_line(frame, (0, h-52), (w, h-52), color, 1, 2)
+        cx, cy = 16, h - 26
+        for r, a in [(10, 0.10), (6, 0.20), (4, 1.0)]:
+            if a == 1.0:
+                cv2.circle(frame, (cx, cy), r, color, -1, cv2.LINE_AA)
+            else:
+                ov = frame.copy()
+                cv2.circle(ov, (cx, cy), r, color, -1, cv2.LINE_AA)
+                self._blend(frame, ov, a)
+        self._text(frame, feedback, 32, h-16, self.FONT_PLAIN, 0.72, color, 2)
 
-        self._draw_rounded_rect(frame, 0, h-56, w, h, self.COLOR_BG, alpha=0.85)
-        self._draw_accent_line(frame, 0, h-56, w, color)
-
-        # Иконка-точка
-        cv2.circle(frame, (18, h-25), 5, color, -1, cv2.LINE_AA)
-        cv2.circle(frame, (18, h-25), 7, color, 1, cv2.LINE_AA)
-
-        self._draw_outlined_text(frame, feedback, (32, h-18), self.FONT_PLAIN, 0.78, color, 2)
+    # ── Угол спины ────────────────────────────────────────────────────────
 
     def draw_back_angle(self, frame, angle, is_good):
-        """Карточка угла спины в левом нижнем углу над фидбэком."""
-        h, w, _ = frame.shape
-        color   = self.COLOR_GREEN if is_good else self.COLOR_RED
-        icon    = "\u2713" if is_good else "!"
+        h = frame.shape[0]
+        color  = self.C_NEON if is_good else self.C_RED
+        icon   = "OK" if is_good else "!!"
+        y_base = h - 60
+        self._fill_rect(frame, 10, y_base-28, 175, y_base+8, self.C_PANEL, 0.88)
+        cv2.rectangle(frame, (10, y_base-28), (175, y_base+8), self.C_NEON_DIM, 1)
+        cv2.putText(frame, "BACK ANGLE", (18, y_base-12), self.FONT_PLAIN, 0.37, self.C_MUTED, 1, cv2.LINE_AA)
+        self._text(frame, f"{icon}  {int(angle)} deg", 18, y_base+4, self.FONT_MONO, 0.62, color, 2)
 
-        y_base = h - 65
-        self._draw_rounded_rect(frame, 12, y_base-28, 170, y_base+8, self.COLOR_BG, alpha=0.75)
-
-        cv2.putText(frame, "BACK", (20, y_base-10), self.FONT_PLAIN, 0.42, self.COLOR_MUTED, 1, cv2.LINE_AA)
-        self._draw_outlined_text(frame, f"{icon} {int(angle)} deg", (20, y_base+4), self.FONT_MONO, 0.65, color, 2)
+    # ── Предупреждения ────────────────────────────────────────────────────
 
     def draw_form_warnings(self, frame, warnings):
-        """Предупреждения о технике — карточки в правом верхнем углу."""
-        if not warnings:
-            return
-
+        if not warnings: return
         h, w, _ = frame.shape
-        y_start = 82
-
-        for i, warning in enumerate(warnings):
-            y   = y_start + i * 38
-            tw  = cv2.getTextSize(warning, self.FONT_PLAIN, 0.65, 2)[0][0]
-            x1  = w - tw - 40
-            x2  = w - 8
-
-            self._draw_rounded_rect(frame, x1-4, y-24, x2, y+8, (40, 0, 0), alpha=0.85)
-            cv2.rectangle(frame, (x1-4, y-24), (x2, y+8), self.COLOR_RED, 1)
-
-            self._draw_outlined_text(frame, warning, (x1, y), self.FONT_PLAIN, 0.65, self.COLOR_RED, 2)
+        y = 82
+        for warning in warnings:
+            tw = cv2.getTextSize(warning, self.FONT_PLAIN, 0.62, 2)[0][0]
+            x1 = w - tw - 46
+            self._fill_rect(frame, x1, y-22, w-8, y+8, (25,5,5), 0.90)
+            self._glow_rect(frame, x1, y-22, w-8, y+8, self.C_RED, 1, glow=2)
+            self._text(frame, warning, x1+6, y, self.FONT_PLAIN, 0.62, self.C_RED, 2)
+            y += 40
 
     def draw_camera_warning(self, frame, deviation):
-        """Предупреждение о положении камеры."""
         h, w, _ = frame.shape
         cy = h // 2
+        self._fill_rect(frame, w//2-290, cy-50, w//2+290, cy+50, (15,10,0), 0.92)
+        self._glow_rect(frame, w//2-290, cy-50, w//2+290, cy+50, self.C_AMBER, 1, 3)
+        self._corner_hud(frame, w//2-290, cy-50, w//2+290, cy+50, self.C_AMBER, 14, 2)
+        self._text_c(frame, f"CAMERA DIAGONAL  ~{int(deviation)} DEG", w//2, cy-12, self.FONT_MONO, 0.68, self.C_AMBER, 2)
+        self._text_c(frame, "Place camera strictly to the side", w//2, cy+24, self.FONT_PLAIN, 0.52, self.C_MUTED, 1)
 
-        self._draw_rounded_rect(frame, w//2-280, cy-45, w//2+280, cy+45, self.COLOR_BG, alpha=0.9)
-        cv2.rectangle(frame, (w//2-280, cy-45), (w//2+280, cy+45), self.COLOR_ORANGE, 1)
-
-        line1 = f"Camera diagonal (~{int(deviation)} deg off)"
-        line2 = "Place camera strictly to the side"
-
-        l1w = cv2.getTextSize(line1, self.FONT_MONO, 0.72, 2)[0][0]
-        l2w = cv2.getTextSize(line2, self.FONT_PLAIN, 0.58, 1)[0][0]
-
-        self._draw_outlined_text(frame, line1, (w//2 - l1w//2, cy-10), self.FONT_MONO, 0.72, self.COLOR_ORANGE, 2)
-        cv2.putText(frame, line2, (w//2 - l2w//2, cy+25), self.FONT_PLAIN, 0.58, self.COLOR_MUTED, 1, cv2.LINE_AA)
+    # ── Бар глубины ───────────────────────────────────────────────────────
 
     def draw_angle_bar(self, frame, angle, up_thresh, down_thresh):
-        """
-        Вертикальный прогресс-бар глубины приседания (справа от кадра).
-        Зелёный = хорошо, красный = не достаточно глубоко.
-        """
         h, w, _ = frame.shape
-
-        bar_x  = w - 28
-        bar_y1 = 90
-        bar_y2 = h - 70
-        bar_h  = bar_y2 - bar_y1
-        bw     = 12
-
-        # Фон бара
-        self._draw_rounded_rect(frame, bar_x, bar_y1, bar_x+bw, bar_y2, self.COLOR_BG, alpha=0.8)
-        cv2.rectangle(frame, (bar_x, bar_y1), (bar_x+bw, bar_y2), (50, 55, 70), 1)
-
-        # Заполнение: 0% = up_thresh (прямо), 100% = down_thresh (приседание)
+        bx = w - 26; by1 = 82; by2 = h - 62; bh = by2 - by1; bw = 12
+        self._fill_rect(frame, bx, by1, bx+bw, by2, self.C_PANEL, 0.88)
+        cv2.rectangle(frame, (bx, by1), (bx+bw, by2), self.C_BORDER, 1)
+        cv2.putText(frame, "D", (bx+1, by1-6), self.FONT_PLAIN, 0.35, self.C_MUTED, 1, cv2.LINE_AA)
         clamped = max(down_thresh, min(up_thresh, angle))
         pct     = (up_thresh - clamped) / max(1, up_thresh - down_thresh)
-        fill_h  = int(bar_h * pct)
-        fill_y  = bar_y2 - fill_h
-
-        fill_color = self.COLOR_GREEN if pct >= 0.95 else (self.COLOR_YELLOW if pct > 0.5 else self.COLOR_RED)
-        if fill_h > 0:
-            cv2.rectangle(frame, (bar_x+1, fill_y), (bar_x+bw-1, bar_y2-1), fill_color, -1)
-
-        # Метка
-        cv2.putText(frame, "DEPTH", (bar_x-2, bar_y1-8), self.FONT_PLAIN, 0.38, self.COLOR_MUTED, 1, cv2.LINE_AA)
+        fill_h  = int(bh * pct); fill_y = by2 - fill_h
+        fill_col = self.C_NEON if pct >= 0.95 else (self.C_AMBER if pct > 0.5 else self.C_RED)
+        if fill_h > 2:
+            cv2.rectangle(frame, (bx+1, fill_y), (bx+bw-1, by2-1), fill_col, -1)
+            cv2.line(frame, (bx+1, fill_y), (bx+bw-1, fill_y), self.C_WHITE, 1, cv2.LINE_AA)
 
     def draw_fps(self, frame, fps):
-        """FPS в правом верхнем углу."""
         h, w, _ = frame.shape
         text = f"{int(fps)} FPS"
-        tw   = cv2.getTextSize(text, self.FONT_PLAIN, 0.45, 1)[0][0]
-        cv2.putText(frame, text, (w - tw - 44, 88), self.FONT_PLAIN, 0.45, self.COLOR_MUTED, 1, cv2.LINE_AA)
+        tw = cv2.getTextSize(text, self.FONT_PLAIN, 0.4, 1)[0][0]
+        cv2.putText(frame, text, (w-tw-30, 82), self.FONT_PLAIN, 0.4, self.C_MUTED, 1, cv2.LINE_AA)
 
-    # ── Стартовый экран (выбор источника) ─────────────────────────────────
+    # ── Экран выбора источника ────────────────────────────────────────────
 
     def draw_source_selection(self, frame, selected=0, mouse_pos=None):
-        """
-        Экран выбора источника: 0 = webcam, 1 = video file.
-        selected — индекс выбранного пункта.
-        Возвращает список rect кнопок [(x1,y1,x2,y2), ...].
-        """
         h, w, _ = frame.shape
-        mx, my  = (mouse_pos[0], mouse_pos[1]) if mouse_pos else (-1, -1)
 
-        # Полупрозрачный оверлей
-        overlay = np.zeros_like(frame, dtype=np.uint8)
-        overlay[:] = self.COLOR_BG
-        cv2.addWeighted(overlay, 0.92, frame, 0.08, 0, frame)
+        # Фон
+        ov = np.zeros_like(frame, dtype=np.uint8)
+        ov[:] = self.C_BG
+        cv2.addWeighted(ov, 0.96, frame, 0.04, 0, frame)
+        self._dot_grid(frame, 0, 0, w, h, 28, alpha=0.55)
 
-        # Заголовок
-        title  = "AI FITNESS COACH"
-        tw     = cv2.getTextSize(title, self.FONT_MONO, 1.5, 3)[0][0]
-        self._draw_outlined_text(frame, title, (w//2 - tw//2, h//2 - 120), self.FONT_MONO, 1.5, self.COLOR_ACCENT, 3)
+        # Угловые декоры экрана
+        self._corner_hud(frame, 12, 12, w-12, h-12, self.C_NEON_DIM, size=24, thick=1, glow=True)
+        for x, dx in [(12, 1), (w-12, -1)]:
+            for y, dy in [(12, 1), (h-12, -1)]:
+                cv2.line(frame, (x+dx*30, y), (x+dx*60, y), self.C_NEON_DIM, 1, cv2.LINE_AA)
+                cv2.line(frame, (x, y+dy*30), (x, y+dy*60), self.C_NEON_DIM, 1, cv2.LINE_AA)
 
-        sub   = "SELECT INPUT SOURCE"
-        sw    = cv2.getTextSize(sub, self.FONT_PLAIN, 0.55, 1)[0][0]
-        cv2.putText(frame, sub, (w//2 - sw//2, h//2 - 80), self.FONT_PLAIN, 0.55, self.COLOR_MUTED, 1, cv2.LINE_AA)
+        # Центральная панель
+        pw, ph = 480, 355; px1 = w//2-pw//2; px2 = w//2+pw//2
+        py1 = h//2-ph//2-10; py2 = h//2+ph//2-10
+        self._fill_rect(frame, px1, py1, px2, py2, self.C_PANEL, alpha=0.96)
+        self._scanlines(frame, py1, py2, px1, px2, alpha=0.05)
 
-        self._draw_accent_line(frame, w//2 - 200, h//2 - 64, w//2 + 200)
+        # Неоновая рамка
+        self._glow_rect(frame, px1, py1, px2, py2, self.C_NEON, 1, glow=4)
+        self._corner_hud(frame, px1, py1, px2, py2, self.C_NEON, size=20, thick=2)
 
-        options = [
-            ("WEBCAM",       "Use live camera feed",  "[W]"),
-            ("VIDEO FILE",   "Load recorded video",   "[V]"),
-        ]
+        # Полоска-акцент сверху
+        ov2 = frame.copy()
+        cv2.rectangle(ov2, (px1, py1), (px2, py1+3), self.C_NEON, -1)
+        self._blend(frame, ov2, 0.9)
+        cv2.rectangle(frame, (px1, py1), (px2, py1+3), self.C_NEON, -1)
 
+        # Заголовок с неоновым свечением
+        title = "AI FITNESS COACH"
+        tw = cv2.getTextSize(title, self.FONT_MONO, 1.15, 2)[0][0]
+        for gi in range(3, 0, -1):
+            ov3 = frame.copy()
+            cv2.putText(ov3, title, (w//2-tw//2, py1+50), self.FONT_MONO, 1.15, self.C_NEON, 2+gi*2, cv2.LINE_AA)
+            self._blend(frame, ov3, 0.06*gi)
+        cv2.putText(frame, title, (w//2-tw//2, py1+50), self.FONT_MONO, 1.15, self.C_NEON, 2, cv2.LINE_AA)
+
+        self._text_c(frame, "SELECT INPUT SOURCE", w//2, py1+72, self.FONT_PLAIN, 0.48, self.C_MUTED, 1)
+        self._glow_line(frame, (px1+20, py1+84), (px2-20, py1+84), self.C_NEON_DIM, 1, 1)
+
+        # Кнопки
+        options = ["WEBCAM", "VIDEO FILE"]
         btn_rects = []
-        for i, (label, desc, shortcut) in enumerate(options):
-            bx1 = w//2 - 200
-            by1 = h//2 - 30 + i * 78
-            bx2 = w//2 + 200
-            by2 = by1 + 60
+        for i, label in enumerate(options):
+            bx1 = w//2-180; bx2 = w//2+180
+            by1 = py1+102+i*92; by2 = by1+60
             btn_rects.append((bx1, by1, bx2, by2))
-
             self.draw_button(frame, label, bx1, by1, bx2, by2, mouse_pos, 'primary')
-
-            # Подпись под кнопкой
-            dw = cv2.getTextSize(desc, self.FONT_PLAIN, 0.46, 1)[0][0]
-            cv2.putText(frame, desc, (w//2 - dw//2, by2 + 16),
-                        self.FONT_PLAIN, 0.46, self.COLOR_MUTED, 1, cv2.LINE_AA)
-
         return btn_rects
 
     # ── Экран калибровки ──────────────────────────────────────────────────
 
     def draw_calibration_overlay(self, frame, phase, countdown, angle=None):
-        """Красивый оверлей во время калибровки."""
         h, w, _ = frame.shape
+        color       = self.C_NEON if phase == "UP" else self.C_BLUE
+        instruction = "STAND STRAIGHT" if phase == "UP" else "SQUAT DOWN"
+        step_label  = "STEP 1 OF 2"   if phase == "UP" else "STEP 2 OF 2"
 
-        if phase == "UP":
-            instruction = "STAND STRAIGHT"
-            color       = self.COLOR_GREEN
-        else:
-            instruction = "SQUAT DOWN"
-            color       = self.COLOR_BLUE
+        ov = frame.copy()
+        cv2.rectangle(ov, (0, 0), (w, h), self.C_BG, -1)
+        self._blend(frame, ov, 0.62)
+        self._scanlines(frame, 0, h, alpha=0.07)
+        self._glow_rect(frame, 0, 0, w-1, h-1, color, 2, 3)
+        self._corner_hud(frame, 8, 8, w-8, h-8, color, 22, 2)
 
-        # Тёмный оверлей
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (w, h), self.COLOR_BG, -1)
-        cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+        self._text_c(frame, step_label, w//2, h//2-130, self.FONT_PLAIN, 0.52, self.C_MUTED, 1)
 
-        # Рамка
-        thick = 3
-        for offset in range(0, 16, 8):
-            alpha_v = 0.8 - offset * 0.04
-            ov2 = frame.copy()
-            cv2.rectangle(ov2, (offset, offset), (w-offset, h-offset), color, thick)
-            cv2.addWeighted(ov2, alpha_v * 0.3, frame, 1 - alpha_v * 0.3, 0, frame)
+        iw = cv2.getTextSize(instruction, self.FONT_MONO, 1.7, 3)[0][0]
+        self._fill_rect(frame, w//2-iw//2-20, h//2-118, w//2+iw//2+20, h//2-68, self.C_PANEL, 0.88)
+        self._glow_rect(frame, w//2-iw//2-20, h//2-118, w//2+iw//2+20, h//2-68, color, 1, 2)
+        self._text(frame, instruction, w//2-iw//2, h//2-74, self.FONT_MONO, 1.7, color, 3)
 
-        cv2.rectangle(frame, (0, 0), (w, h), color, 2)
-
-        # Шаг
-        step_text = "STEP 1 OF 2" if phase == "UP" else "STEP 2 OF 2"
-        stw = cv2.getTextSize(step_text, self.FONT_PLAIN, 0.55, 1)[0][0]
-        cv2.putText(frame, step_text, (w//2 - stw//2, h//2 - 140), self.FONT_PLAIN, 0.55, self.COLOR_MUTED, 1, cv2.LINE_AA)
-
-        # Основная инструкция
-        iw = cv2.getTextSize(instruction, self.FONT_MONO, 1.8, 3)[0][0]
-        self._draw_outlined_text(frame, instruction, (w//2 - iw//2, h//2 - 90), self.FONT_MONO, 1.8, color, 3)
-
-        # Счётчик
         if countdown > 0:
-            cw = cv2.getTextSize(str(countdown), self.FONT_MONO, 5.0, 5)[0][0]
-            self._draw_outlined_text(frame, str(countdown), (w//2 - cw//2, h//2 + 60), self.FONT_MONO, 5.0, color, 5)
+            cw = cv2.getTextSize(str(countdown), self.FONT_MONO, 5.5, 5)[0][0]
+            for gi in range(4, 0, -1):
+                ov2 = frame.copy()
+                cv2.putText(ov2, str(countdown), (w//2-cw//2, h//2+72), self.FONT_MONO, 5.5, color, 5+gi*2, cv2.LINE_AA)
+                self._blend(frame, ov2, 0.06*gi)
+            cv2.putText(frame, str(countdown), (w//2-cw//2, h//2+72), self.FONT_MONO, 5.5, color, 5, cv2.LINE_AA)
         else:
-            mw = cv2.getTextSize("Measuring...", self.FONT_MONO, 1.1, 2)[0][0]
-            self._draw_outlined_text(frame, "Measuring...", (w//2 - mw//2, h//2 + 20), self.FONT_MONO, 1.1, color, 2)
+            self._text_c(frame, "MEASURING...", w//2, h//2+20, self.FONT_MONO, 1.0, color, 2)
             if angle is not None:
-                aw = cv2.getTextSize(f"Angle: {int(angle)} deg", self.FONT_PLAIN, 0.8, 2)[0][0]
-                self._draw_outlined_text(frame, f"Angle: {int(angle)} deg", (w//2 - aw//2, h//2 + 65), self.FONT_PLAIN, 0.8, self.COLOR_WHITE, 2)
+                self._text_c(frame, f"{int(angle)} DEG", w//2, h//2+60, self.FONT_PLAIN, 0.85, self.C_WHITE, 2)
