@@ -7,9 +7,7 @@ import urllib.request
 
 
 class PoseDetector:
-    """
-    Класс для определения позы человека через MediaPipe Tasks API.
-    """
+    """Detects human pose landmarks using the MediaPipe Tasks API."""
 
     LANDMARKS = {
         "left":  {"hip": 23, "knee": 25, "ankle": 27},
@@ -34,25 +32,23 @@ class PoseDetector:
         )
         self.landmarker    = vision.PoseLandmarker.create_from_options(options)
         self.frame_index   = 0
-        self._ms_per_frame = 33.333  # default 30 fps; override via set_fps()
+        self._ms_per_frame = 33.333  # default 30 fps; override with set_fps()
 
     def set_fps(self, fps: float):
-        """Устанавливает реальный fps источника чтобы таймстемпы были точными."""
+        """Sets source FPS so timestamps are accurate."""
         if fps and fps > 0:
             self._ms_per_frame = 1000.0 / fps
 
     def process_frame(self, frame):
         rgb_frame    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image     = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-        # Таймстемп строго монотонен и отражает реальный интервал между кадрами
+        # Strictly monotonic; reflects real inter-frame interval
         timestamp_ms = int(self.frame_index * self._ms_per_frame)
         self.frame_index += 1
         return self.landmarker.detect_for_video(mp_image, timestamp_ms)
 
     def get_landmarks(self, results, frame_shape, leg="left"):
-        """
-        Возвращает 2D координаты (пиксели) и 3D координаты (нормализованные).
-        """
+        """Returns 2D pixel coords and normalized 3D coords for the given leg."""
         if not results.pose_landmarks or len(results.pose_landmarks) == 0:
             return None
 
@@ -70,19 +66,19 @@ class PoseDetector:
             return [lm.x, lm.y, lm.z]
 
         return {
-            # 2D для рисования
+            # 2D for rendering
             "shoulder": get_2d(shoulder_index),
             "hip":      get_2d(indices["hip"]),
             "knee":     get_2d(indices["knee"]),
             "ankle":    get_2d(indices["ankle"]),
 
-            # 3D для точных вычислений
+            # 3D for accurate angle calculations
             "hip_3d":      get_3d(indices["hip"]),
             "knee_3d":     get_3d(indices["knee"]),
             "ankle_3d":    get_3d(indices["ankle"]),
             "shoulder_3d": get_3d(shoulder_index),
 
-            # Z бёдер для определения угла камеры
+            # Hip Z-depth for camera angle estimation
             "left_hip_z":  landmarks[23].z,
             "right_hip_z": landmarks[24].z,
         }

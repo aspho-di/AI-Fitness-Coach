@@ -5,21 +5,16 @@ from angle_calculator import calculate_angle_3d, get_best_leg
 
 
 class Calibrator:
-    """
-    Автоматически определяет пороговые значения углов
-    путём калибровки в начале сессии.
-    """
+    """Measures standing and squat angles at session start to set rep-counting thresholds."""
 
     def __init__(self, detector):
         self.detector = detector
-        # Импортируем рендерер лениво чтобы избежать цикличных зависимостей
+        # Lazy import to avoid circular dependency
         from ui_renderer import UIRenderer
         self.renderer = UIRenderer()
 
     def run(self, cap):
-        """
-        Калибровка с GUI — показывает инструкции в окне OpenCV.
-        """
+        """Calibration with GUI — shows instructions in an OpenCV window."""
         up_angle   = self._calibrate_phase(cap, phase="UP")
         down_angle = self._calibrate_phase(cap, phase="DOWN")
 
@@ -36,9 +31,7 @@ class Calibrator:
         }
 
     def run_headless(self, cap, set_frame_callback):
-        """
-        Калибровка без GUI — кадры передаются в браузер через callback.
-        """
+        """Calibration without GUI — frames are pushed to the browser via callback."""
         up_angle   = self._calibrate_phase_headless(cap, phase="UP",   set_frame=set_frame_callback)
         down_angle = self._calibrate_phase_headless(cap, phase="DOWN", set_frame=set_frame_callback)
 
@@ -54,13 +47,13 @@ class Calibrator:
             "down_angle": down_threshold
         }
 
-    # ── Приватные методы ───────────────────────────────────────────────────
+    # Private methods
 
     def _calibrate_phase(self, cap, phase):
-        """Один этап калибровки с GUI окном OpenCV."""
+        """Single calibration phase with OpenCV GUI window."""
         win_name = "AI Fitness Coach"
 
-        # Обратный отсчёт 3 секунды
+        # 3-second countdown
         deadline = time.time() + 3
         while time.time() < deadline:
             ret, frame = cap.read()
@@ -71,7 +64,7 @@ class Calibrator:
             cv2.imshow(win_name, frame)
             cv2.waitKey(1)
 
-        # Сбор углов 2 секунды
+        # Collect angles for 2 seconds
         angles   = []
         deadline = time.time() + 2
 
@@ -101,8 +94,8 @@ class Calibrator:
         return round(float(np.median(angles)), 1)
 
     def _calibrate_phase_headless(self, cap, phase, set_frame):
-        """Один этап калибровки без GUI — отправляет кадры через callback."""
-        # Обратный отсчёт 3 секунды
+        """Single calibration phase without GUI — pushes frames via callback."""
+        # 3-second countdown
         deadline = time.time() + 3
         while time.time() < deadline:
             ret, frame = cap.read()
@@ -113,7 +106,7 @@ class Calibrator:
             _, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             set_frame(jpeg.tobytes())
 
-        # Сбор углов 2 секунды
+        # Collect angles for 2 seconds
         angles   = []
         deadline = time.time() + 2
 

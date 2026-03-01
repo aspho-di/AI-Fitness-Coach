@@ -1,7 +1,7 @@
 """
-AI Fitness Coach — PyQt6 приложение
-Запуск: python app_qt.py
-Установка: pip install PyQt6
+AI Fitness Coach — PyQt6 application
+Run: python main.py
+Requires: pip install PyQt6
 """
 import sys, os, time, cv2, numpy as np
 from PyQt6.QtWidgets import (
@@ -16,12 +16,12 @@ from PyQt6.QtGui import QImage, QPixmap, QFont, QPainter, QColor, QPen, QPalette
 sys.path.insert(0, os.path.dirname(__file__))
 
 def resource_path(rel):
-    """Работает и в .py и в упакованном .exe (PyInstaller)."""
+    """Resolves resource path for both .py and PyInstaller .exe."""
     import sys, os
     base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, rel)
 
-# ── Цветовая система ──────────────────────────────────────────────────────
+# Color palette  
 C = {
     "bg":       "#060a0e",
     "panel":    "#0d1a24",
@@ -37,7 +37,7 @@ C = {
     "dim":      "#1e2e3a",
 }
 
-# ── QSS Стили ─────────────────────────────────────────────────────────────
+# QSS Styles
 GLOBAL_STYLE = f"""
 * {{
     font-family: 'Segoe UI', 'SF Pro Display', Arial, sans-serif;
@@ -117,7 +117,7 @@ QPushButton:hover {{
 }}
 """
 
-# ── Утилиты ───────────────────────────────────────────────────────────────
+# Utilities 
 def make_shadow(widget, color=C['neon'], blur=20, alpha=80):
     fx = QGraphicsDropShadowEffect(widget)
     fx.setBlurRadius(blur)
@@ -169,9 +169,9 @@ def vsep():
     line.setStyleSheet(f"background: {C['border']}; margin: 8px 0;")
     return line
 
-# ── HUD Frame с угловыми акцентами ────────────────────────────────────────
+# HUD panel with corner accents
 class HudPanel(QFrame):
-    """Панель с неоновыми угловыми маркерами и свечением рамки."""
+    """Panel with neon corner markers and glowing border."""
     def __init__(self, parent=None, accent=None, corner=20):
         super().__init__(parent)
         self._accent = QColor(accent or C['neon'])
@@ -192,14 +192,14 @@ class HudPanel(QFrame):
         cs = self._corner
         ac = self._accent
 
-        # Свечение угловых линий
+        # Layered glow on corner lines
         for width, alpha in [(6, 18), (4, 30), (2, 60), (2, 255)]:
             gc = QColor(ac)
             gc.setAlpha(alpha)
             pen = QPen(gc, width)
             pen.setCapStyle(Qt.PenCapStyle.FlatCap)
             p.setPen(pen)
-            # Все 4 угла
+            # All 4 corners
             segs = [
                 (r.left(), r.top() + cs,   r.left(),      r.top(),       r.left() + cs,  r.top()),
                 (r.right()-cs, r.top(),     r.right(),     r.top(),       r.right(),      r.top() + cs),
@@ -211,7 +211,7 @@ class HudPanel(QFrame):
                 p.drawLine(QPoint(mx,my), QPoint(x2,y2))
         p.end()
 
-# ── Виджет видеокадра ─────────────────────────────────────────────────────
+# Video frame widget
 class VideoWidget(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -232,14 +232,14 @@ class VideoWidget(QLabel):
         img   = QImage(rgb.data, nw, nh, nw*3, QImage.Format.Format_RGB888)
         self.setPixmap(QPixmap.fromImage(img))
 
-# ── Рабочий поток ─────────────────────────────────────────────────────────
+# Worker thread
 class Worker(QThread):
     preview_frame  = pyqtSignal(object)
     calib_frame    = pyqtSignal(object)
     calib_done     = pyqtSignal(float, float)
     analysis_frame = pyqtSignal(object)
     hud            = pyqtSignal(int, str, str, str, int, int, bool, list, int)
-    # hud: counter, stage, feedback, color_hex, fps, back_angle, back_good, warnings, depth_pct
+    # hud: counter, stage, feedback, color_hex, fps, back_angle, back_ok, warnings, depth_pct
     ended          = pyqtSignal(int)
 
     def __init__(self):
@@ -280,44 +280,44 @@ class Worker(QThread):
         if not cap.isOpened():
             self._alive = False; return
 
-        # Передаём реальный fps источника в детектор для точных таймстемпов
+        # Pass source FPS to detector for accurate timestamps
         src_fps = cap.get(cv2.CAP_PROP_FPS)
         detector.set_fps(src_fps if src_fps > 0 else 30.0)
 
-        # Первый кадр для видео
+        # Grab first frame for video preview
         if self._source == 'video':
             ok, first = cap.read()
             if ok: self.preview_frame.emit(first)
 
-        # Предпросмотр
+        # Preview loop
         while self._alive and self._mode == 'preview':
             if self._source == 'webcam':
                 ok, f = cap.read()
                 if ok: self.preview_frame.emit(f)
             self.msleep(30)
 
-        # Калибровка
+        # Calibration
         if self._alive and self._mode == 'calibrate':
             up_a  = self._cal_phase(cap, detector, renderer, 'UP')
             dn_a  = self._cal_phase(cap, detector, renderer, 'DOWN')
-            # Передаём сырые углы — пороги считаются в go_analyze
+            # Emit raw angles — thresholds are computed in go_analyze
             self.calib_done.emit(round(up_a, 1), round(dn_a, 1))
             self._mode = None
             while self._alive and self._mode is None:
                 self.msleep(30)
 
-        # ── Анализ: счётчик приседаний ──────────────────────────────────────
+        # ── Analysis: squat rep counter ─────────────────────────────────────
         #
-        # Алгоритм: относительный гистерезис, не зависит от абсолютных порогов.
+        # Uses relative hysteresis — independent of absolute angle thresholds.
         #
-        # После калибровки знаем standing_angle (стоя) и squat_angle (присед).
-        # Реп засчитывается когда:
-        #   1. Угол опустился ниже UP_THRESH (= standing * 0.85) → вошли в DOWN
-        #   2. Угол поднялся выше UP_THRESH обратно → вышли из DOWN
-        #   3. За время DOWN минимальный угол был <= DN_THRESH (= standing * 0.60)
+        # After calibration we know standing_angle and squat_angle.
+        # A rep is counted when:
+        #   1. Angle drops below UP_THRESH (= standing * 0.85)  → enter DOWN
+        #   2. Angle rises back above UP_THRESH                  → exit DOWN
+        #   3. Minimum angle during DOWN was <= DN_THRESH (= avg of standing + squat)
         #
-        # Это работает при любом угле камеры — пороги адаптируются к
-        # реальному стоячему углу пользователя, а не к абсолютным 140°/90°.
+        # Works at any camera angle — thresholds adapt to the user's
+        # actual standing angle, not fixed values like 140°/90°.
 
         counter           = 0
         stage             = None      # None | 'UP' | 'DOWN'
@@ -325,18 +325,18 @@ class Worker(QThread):
         angle_buf         = []
         BUF_SIZE          = 5
 
-        # Пороги из калибровки; если не было — используем дефолты
-        # self._up = стоячий угол (после калибровки ~160°, дефолт 140°)
-        # self._dn = приседной угол (после калибровки ~70°,  дефолт 90°)
+        # Thresholds from calibration; use defaults if not calibrated
+        # self._up = standing angle  (calibrated ~160°, default 140°)
+        # self._dn = squat angle     (calibrated ~70°,  default 90°)
         standing = self._up
         squatting = self._dn
 
-        # UP_THRESH: угол выше которого = "стоя"  (85% от стоячего)
-        # DN_THRESH: минимальный угол для засчёта репа (среднее стоя+присед)
+        # UP_THRESH: angle above which = "standing"  (85% of standing angle)
+        # DN_THRESH: minimum angle required to count a rep (midpoint of range)
         UP_THRESH = round(standing * 0.85, 1)
         DN_THRESH = round((standing + squatting) / 2.0, 1)
 
-        # Гарантируем рабочий зазор
+        # Ensure minimum gap between thresholds
         if UP_THRESH - DN_THRESH < 20:
             DN_THRESH = UP_THRESH - 20
 
@@ -375,7 +375,7 @@ class Worker(QThread):
                     angle_buf.pop(0)
                 angle = sum(angle_buf) / len(angle_buf)
 
-                # Всегда отслеживаем минимум пока не в UP
+                # Track minimum angle while not in UP
                 if stage != 'UP':
                     min_angle_reached = min(min_angle_reached, angle)
 
@@ -385,7 +385,7 @@ class Worker(QThread):
                     if knee_dev < -KNEE_LIM:
                         warnings.append('Knees caving in')
 
-                # ── Машина состояний ──────────────────────────────────────
+                # State machine
                 if angle > UP_THRESH:
                     if stage == 'DOWN':
                         if min_angle_reached <= DN_THRESH:
@@ -464,11 +464,9 @@ class Worker(QThread):
             self.msleep(30)
         return float(np.median(angles)) if angles else (160.0 if phase=='UP' else 70.0)
 
-# ══════════════════════════════════════════════════════════════════════════
-#  ЭКРАНЫ
-# ══════════════════════════════════════════════════════════════════════════
+#  SCREENS
 
-# ── Экран выбора источника ────────────────────────────────────────────────
+# Source selection screen
 class MenuScreen(QWidget):
     sig_webcam = pyqtSignal()
     sig_video  = pyqtSignal(str)
@@ -478,7 +476,7 @@ class MenuScreen(QWidget):
         self.setObjectName('root')
         self.setStyleSheet(f"background: {C['bg']};")
 
-        # Анимация фона
+        # Background animation timer
         self._tick = 0
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_tick)
@@ -494,7 +492,7 @@ class MenuScreen(QWidget):
         inner.setContentsMargins(44, 40, 44, 40)
         inner.setSpacing(0)
 
-        # Заголовок
+        # Title
         title = neon_label("AI FITNESS COACH", C['neon'], 22)
         inner.addWidget(title)
         inner.addSpacing(8)
@@ -535,7 +533,7 @@ class MenuScreen(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
 
-        # Dot grid с лёгкой анимацией дрейфа
+        # Dot grid with subtle drift animation
         spacing = 36
         offset = (self._tick * 0.15) % spacing
         c_dot = QColor(C['neon'])
@@ -552,7 +550,7 @@ class MenuScreen(QWidget):
                 gy += spacing
             gx += spacing
 
-        # Угловые акценты экрана
+        # Screen corner accents
         cs = 50
         for width, alpha in [(7, 8), (4, 20), (2, 70)]:
             ac = QColor(C['neon'])
@@ -570,7 +568,7 @@ class MenuScreen(QWidget):
                 p.drawLine(QPoint(x1,y1), QPoint(mx,my))
                 p.drawLine(QPoint(mx,my), QPoint(x2,y2))
 
-        # Тонкие горизонтальные линии
+        # Thin horizontal scan lines
         for y_frac in [0.25, 0.5, 0.75]:
             lc = QColor(C['neon'])
             lc.setAlpha(12)
@@ -579,7 +577,7 @@ class MenuScreen(QWidget):
 
         p.end()
 
-# ── Экран предпросмотра ───────────────────────────────────────────────────
+# Preview screen
 class PreviewScreen(QWidget):
     sig_confirm = pyqtSignal()
     sig_back    = pyqtSignal()
@@ -595,7 +593,7 @@ class PreviewScreen(QWidget):
         self.video = VideoWidget()
         layout.addWidget(self.video)
 
-        # Нижняя панель
+        # Bottom action bar
         bar = QFrame()
         bar.setFixedHeight(90)
         bar.setStyleSheet(f"""
@@ -646,7 +644,7 @@ class PreviewScreen(QWidget):
     def set_sub(self, t):  self.lbl_sub.setText(t)
     def set_title(self, t): self.lbl_title.setText(t)
 
-# ── Экран анализа ─────────────────────────────────────────────────────────
+# Analysis screen
 class AnalysisScreen(QWidget):
     sig_menu = pyqtSignal()
 
@@ -659,7 +657,7 @@ class AnalysisScreen(QWidget):
         layout.setContentsMargins(0,0,0,0)
         layout.setSpacing(0)
 
-        # ── Шапка ────────────────────────────────────────────────────────
+        # Header
         header = QFrame()
         header.setFixedHeight(68)
         header.setStyleSheet(f"""
@@ -681,7 +679,7 @@ class AnalysisScreen(QWidget):
         hl.addWidget(self.btn_menu)
         hl.addWidget(vsep())
 
-        # Лого
+        # Logo
         logo = QVBoxLayout()
         logo.setSpacing(0)
         t1 = QLabel("AI FITNESS")
@@ -692,7 +690,7 @@ class AnalysisScreen(QWidget):
         hl.addLayout(logo)
         hl.addStretch(1)
 
-        # Счётчик
+        # Rep counter
         ctr = QVBoxLayout(); ctr.setSpacing(1)
         lbl_s = QLabel("SQUATS")
         lbl_s.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -706,7 +704,7 @@ class AnalysisScreen(QWidget):
 
         hl.addWidget(vsep())
 
-        # Stage
+        # Stage indicator
         stg = QVBoxLayout(); stg.setSpacing(2)
         lbl_st = QLabel("STAGE")
         lbl_st.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -724,18 +722,18 @@ class AnalysisScreen(QWidget):
 
         layout.addWidget(header)
 
-        # ── Видео ─────────────────────────────────────────────────────────
+        # Video
         self.video = VideoWidget()
         layout.addWidget(self.video)
 
-        # Depth bar поверх видео (абсолютное позиционирование через overlay)
+        # Depth bar overlaid on video (absolute positioning)
         self.depth_bar = QFrame(self.video)
         self.depth_bar.setGeometry(0, 0, 20, 160)
         self.depth_fill = QFrame(self.depth_bar)
         self.depth_fill.setStyleSheet(f"background:{C['neon']}; border-radius:3px;")
         self.depth_bar.setStyleSheet(f"background:{C['panel']}; border:1px solid {C['border']}; border-radius:4px;")
 
-        # ── Нижняя полоса фидбэка ─────────────────────────────────────────
+        # Bottom feedback bar
         self.fb_bar = QFrame()
         self.fb_bar.setFixedHeight(52)
         self._set_fb_style(C['neon'])
@@ -775,7 +773,7 @@ class AnalysisScreen(QWidget):
         self.lbl_stage.setStyleSheet(f"color:{C['muted']}; font-family:Consolas,monospace; font-size:18px; font-weight:700; background:transparent;")
         self.fb_text.setText("Stand in front of camera")
         self.lbl_fps.setText("-- FPS")
-        # Прячем оверлей завершения если остался с прошлого раза
+        # Hide finish overlay left from previous session
         if hasattr(self, "_fin_overlay"):
             self._fin_overlay.hide()
 
@@ -804,7 +802,7 @@ class AnalysisScreen(QWidget):
         self.depth_fill.setStyleSheet(f"background:{col}; border-radius:2px;")
 
     def show_finished(self, count):
-        """Показывает оверлей поверх последнего кадра — окно НЕ закрывается."""
+        """Shows overlay on top of the last frame — window stays open."""
         if not hasattr(self, "_fin_overlay"):
             ov = QFrame(self)
             ov.setStyleSheet("background: rgba(6,10,14,210);")
@@ -857,7 +855,7 @@ class AnalysisScreen(QWidget):
         if hasattr(self, "_fin_overlay") and self._fin_overlay.isVisible():
             self._fin_overlay.setGeometry(self.rect())
 
-# ── Экран результатов ─────────────────────────────────────────────────────
+# Results screen
 class ResultsScreen(QWidget):
     sig_menu = pyqtSignal()
 
@@ -893,9 +891,9 @@ class ResultsScreen(QWidget):
 
     def set_count(self, n): self.count_lbl.setText(str(n))
 
-# ── Калибровочный оверлей ─────────────────────────────────────────────────
+# Calibration overlay
 class CalibOverlay(QWidget):
-    """Полноэкранный оверлей поверх analysis screen во время калибровки."""
+    """Fullscreen overlay shown on top of the analysis screen during calibration."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
@@ -913,7 +911,7 @@ class CalibOverlay(QWidget):
         layout.addWidget(self.lbl_inst)
         layout.addSpacing(8)
 
-        # Видео в рамке
+        # Framed video preview
         frame = HudPanel(accent=C['neon'], corner=16)
         frame.setFixedSize(640, 360)
         fv = QVBoxLayout(frame)
@@ -932,9 +930,8 @@ class CalibOverlay(QWidget):
             font-size:36px; font-weight:700; letter-spacing:4px; background:transparent;
         """)
 
-# ══════════════════════════════════════════════════════════════════════════
-#  ГЛАВНОЕ ОКНО
-# ══════════════════════════════════════════════════════════════════════════
+#  MAIN WINDOW
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -965,7 +962,7 @@ class MainWindow(QMainWindow):
 
         self._calib_overlay = CalibOverlay(self._analysis)
 
-        # Сигналы
+        # Connect signals
         self._menu.sig_webcam.connect(lambda: self._start('webcam', ''))
         self._menu.sig_video.connect(lambda p: self._start('video', p))
         self._preview.sig_confirm.connect(self._on_confirm)
@@ -979,12 +976,12 @@ class MainWindow(QMainWindow):
         super().resizeEvent(e)
         self._calib_overlay.setGeometry(self._analysis.rect())
 
-    # ── Навигация ─────────────────────────────────────────────────────────
+    # Navigation
     def _start(self, source, path):
         self._source = source
         fname = os.path.basename(path) if path else ""
 
-        # Пересоздаём preview с правильным текстом
+        # Recreate preview screen with the correct text
         old = self._stack.widget(1)
         if source == 'webcam':
             self._preview = PreviewScreen("CAMERA READY", "START CALIBRATION")
@@ -997,7 +994,7 @@ class MainWindow(QMainWindow):
         self._stack.insertWidget(1, self._preview)
         self._stack.removeWidget(old)
 
-        # Запускаем поток
+        # Start worker thread
         self._stop_worker()
         self._worker = Worker()
         self._worker.setup(source, path)
@@ -1027,7 +1024,7 @@ class MainWindow(QMainWindow):
         self._stop_worker()
         self._stack.setCurrentWidget(self._menu)
 
-    # ── Слоты ─────────────────────────────────────────────────────────────
+    # Slots
     def _on_calib_frame(self, f):
         self._calib_overlay.show_frame(f)
 
@@ -1059,7 +1056,7 @@ class MainWindow(QMainWindow):
             else: self.showFullScreen()
 
 
-# ── Запуск ────────────────────────────────────────────────────────────────
+# Entry point
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")

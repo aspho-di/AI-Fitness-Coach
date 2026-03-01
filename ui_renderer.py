@@ -110,7 +110,7 @@ class UIRenderer:
     def _draw_accent_line(self, frame, x1, y, x2, color=None):
         self._glow_line(frame, (x1, y), (x2, y), color or self.C_NEON, 1, 2)
 
-    # ── Кнопка ────────────────────────────────────────────────────────────
+    # Button
 
     def draw_button(self, frame, label, x1, y1, x2, y2, mouse_pos=None, style='primary'):
         mx, my = (mouse_pos[0], mouse_pos[1]) if mouse_pos else (-1, -1)
@@ -138,7 +138,7 @@ class UIRenderer:
         self._text(frame, label, tx, ty, self.FONT_MONO, scale, txt_col, 2)
         return hover
 
-    # ── Скелет ────────────────────────────────────────────────────────────
+    # Skeleton
 
     def draw_joint_lines(self, frame, hip, knee, ankle, color):
         cv2.line(frame, tuple(hip),  tuple(knee),  color, 2, cv2.LINE_AA)
@@ -161,7 +161,7 @@ class UIRenderer:
         cv2.rectangle(frame, (x-4, y-th-2), (x+tw+8, y+4), self.C_NEON_DIM, 1)
         self._text(frame, text, x, y, self.FONT_MONO, 0.7, color, 2)
 
-    # ── Шапка ─────────────────────────────────────────────────────────────
+    # Header
 
     def draw_header(self, frame, counter, stage, mouse_pos=None):
         h, w, _ = frame.shape
@@ -178,13 +178,13 @@ class UIRenderer:
         lw = cv2.getTextSize("SQUATS", self.FONT_PLAIN, 0.42, 1)[0][0]
         cv2.putText(frame, "SQUATS", (w//2 - lw//2, 16), self.FONT_PLAIN, 0.42, self.C_MUTED, 1, cv2.LINE_AA)
         cstr = str(counter)
-        # Уменьшаем масштаб при 3+ цифрах чтобы счётчик всегда помещался в шапку
+        # Scale down font for 3+ digit counts to keep counter within header
         c_scale = 2.4 if len(cstr) <= 2 else (1.9 if len(cstr) == 3 else 1.5)
         c_thick = 3
         (cw, ch), baseline = cv2.getTextSize(cstr, self.FONT_MONO, c_scale, c_thick)
-        # Центрируем по вертикали между строкой "SQUATS" (y≈16) и нижней границей шапки (y=72)
+        # Center vertically between "SQUATS" label (y≈16) and header bottom (y=72)
         cy = 20 + (52 + ch) // 2
-        cy = min(cy, 68)  # не выходим за нижнюю границу шапки
+        cy = min(cy, 68) 
         self._text(frame, cstr, w//2 - cw//2, cy, self.FONT_MONO, c_scale, self.C_WHITE, c_thick)
 
         cv2.line(frame, (w-160,10), (w-160,62), self.C_DIM, 1, cv2.LINE_AA)
@@ -198,7 +198,7 @@ class UIRenderer:
         self._text(frame, stage_txt, w-78-sw//2, 58, self.FONT_MONO, 1.05, stage_color, 2)
         return (btn_x1, btn_y1, btn_x2, btn_y2)
 
-    # ── Фидбэк ────────────────────────────────────────────────────────────
+    # Feedback
 
     def draw_feedback(self, frame, feedback, color):
         h, w, _ = frame.shape
@@ -214,7 +214,7 @@ class UIRenderer:
                 self._blend(frame, ov, a)
         self._text(frame, feedback, 32, h-16, self.FONT_PLAIN, 0.72, color, 2)
 
-    # ── Угол спины ────────────────────────────────────────────────────────
+    # Back angle
 
     def draw_back_angle(self, frame, angle, is_good):
         h = frame.shape[0]
@@ -226,7 +226,7 @@ class UIRenderer:
         cv2.putText(frame, "BACK ANGLE", (18, y_base-12), self.FONT_PLAIN, 0.37, self.C_MUTED, 1, cv2.LINE_AA)
         self._text(frame, f"{icon}  {int(angle)} deg", 18, y_base+4, self.FONT_MONO, 0.62, color, 2)
 
-    # ── Предупреждения ────────────────────────────────────────────────────
+    # Form warnings
 
     def draw_form_warnings(self, frame, warnings):
         if not warnings: return
@@ -249,7 +249,7 @@ class UIRenderer:
         self._text_c(frame, f"CAMERA DIAGONAL  ~{int(deviation)} DEG", w//2, cy-12, self.FONT_MONO, 0.68, self.C_AMBER, 2)
         self._text_c(frame, "Place camera strictly to the side", w//2, cy+24, self.FONT_PLAIN, 0.52, self.C_MUTED, 1)
 
-    # ── Бар глубины ───────────────────────────────────────────────────────
+    # Depth bar
 
     def draw_angle_bar(self, frame, angle, up_thresh, down_thresh):
         h, w, _ = frame.shape
@@ -271,41 +271,41 @@ class UIRenderer:
         tw = cv2.getTextSize(text, self.FONT_PLAIN, 0.4, 1)[0][0]
         cv2.putText(frame, text, (w-tw-30, 82), self.FONT_PLAIN, 0.4, self.C_MUTED, 1, cv2.LINE_AA)
 
-    # ── Экран выбора источника ────────────────────────────────────────────
+    # Source selection screen
 
     def draw_source_selection(self, frame, selected=0, mouse_pos=None):
         h, w, _ = frame.shape
 
-        # Фон
+        # Background
         ov = np.zeros_like(frame, dtype=np.uint8)
         ov[:] = self.C_BG
         cv2.addWeighted(ov, 0.96, frame, 0.04, 0, frame)
         self._dot_grid(frame, 0, 0, w, h, 28, alpha=0.55)
 
-        # Угловые декоры экрана
+        # Screen corner decorations
         self._corner_hud(frame, 12, 12, w-12, h-12, self.C_NEON_DIM, size=24, thick=1, glow=True)
         for x, dx in [(12, 1), (w-12, -1)]:
             for y, dy in [(12, 1), (h-12, -1)]:
                 cv2.line(frame, (x+dx*30, y), (x+dx*60, y), self.C_NEON_DIM, 1, cv2.LINE_AA)
                 cv2.line(frame, (x, y+dy*30), (x, y+dy*60), self.C_NEON_DIM, 1, cv2.LINE_AA)
 
-        # Центральная панель
+        # Center panel
         pw, ph = 480, 355; px1 = w//2-pw//2; px2 = w//2+pw//2
         py1 = h//2-ph//2-10; py2 = h//2+ph//2-10
         self._fill_rect(frame, px1, py1, px2, py2, self.C_PANEL, alpha=0.96)
         self._scanlines(frame, py1, py2, px1, px2, alpha=0.05)
 
-        # Неоновая рамка
+        # Neon border
         self._glow_rect(frame, px1, py1, px2, py2, self.C_NEON, 1, glow=4)
         self._corner_hud(frame, px1, py1, px2, py2, self.C_NEON, size=20, thick=2)
 
-        # Полоска-акцент сверху
+        # Top accent strip
         ov2 = frame.copy()
         cv2.rectangle(ov2, (px1, py1), (px2, py1+3), self.C_NEON, -1)
         self._blend(frame, ov2, 0.9)
         cv2.rectangle(frame, (px1, py1), (px2, py1+3), self.C_NEON, -1)
 
-        # Заголовок с неоновым свечением
+        # Title with neon glow
         title = "AI FITNESS COACH"
         tw = cv2.getTextSize(title, self.FONT_MONO, 1.15, 2)[0][0]
         for gi in range(3, 0, -1):
@@ -317,7 +317,7 @@ class UIRenderer:
         self._text_c(frame, "SELECT INPUT SOURCE", w//2, py1+72, self.FONT_PLAIN, 0.48, self.C_MUTED, 1)
         self._glow_line(frame, (px1+20, py1+84), (px2-20, py1+84), self.C_NEON_DIM, 1, 1)
 
-        # Кнопки
+        # Buttons
         options = ["WEBCAM", "VIDEO FILE"]
         btn_rects = []
         for i, label in enumerate(options):
@@ -327,7 +327,7 @@ class UIRenderer:
             self.draw_button(frame, label, bx1, by1, bx2, by2, mouse_pos, 'primary')
         return btn_rects
 
-    # ── Экран калибровки ──────────────────────────────────────────────────
+    # Calibration overlay
 
     def draw_calibration_overlay(self, frame, phase, countdown, angle=None):
         h, w, _ = frame.shape
