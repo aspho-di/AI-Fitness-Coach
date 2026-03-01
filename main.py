@@ -15,6 +15,12 @@ from PyQt6.QtGui import QImage, QPixmap, QFont, QPainter, QColor, QPen, QPalette
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+def resource_path(rel):
+    """Работает и в .py и в упакованном .exe (PyInstaller)."""
+    import sys, os
+    base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, rel)
+
 # ── Цветовая система ──────────────────────────────────────────────────────
 C = {
     "bg":       "#060a0e",
@@ -933,6 +939,10 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AI Fitness Coach")
+        _ico = resource_path("icon.ico")
+        if os.path.exists(_ico):
+            from PyQt6.QtGui import QIcon
+            self.setWindowIcon(QIcon(_ico))
         self.resize(1280, 720)
         self.setMinimumSize(800, 500)
         self.setStyleSheet(GLOBAL_STYLE)
