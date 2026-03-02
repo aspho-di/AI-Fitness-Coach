@@ -2,9 +2,7 @@ import numpy as np
 
 
 def calculate_angle(a, b, c):
-    """
-    Вычисляет угол в точке b между лучами b->a и b->c (2D).
-    """
+    # Computes the angle at point b between rays b→a and b→c (2D)
     a = np.array(a)
     b = np.array(b)
     c = np.array(c)
@@ -20,10 +18,7 @@ def calculate_angle(a, b, c):
 
 
 def calculate_angle_3d(a, b, c):
-    """
-    Вычисляет угол в точке b используя x, y, z координаты.
-    Точен при любом положении камеры.
-    """
+    # Computes the angle at point b using x, y, z coords. Accurate at any camera angle
     a = np.array(a)
     b = np.array(b)
     c = np.array(c)
@@ -39,10 +34,7 @@ def calculate_angle_3d(a, b, c):
 
 
 def calculate_back_angle(shoulder, hip):
-    """
-    Вычисляет угол наклона спины относительно вертикали.
-    0 градусов = идеально прямая спина.
-    """
+    # Back lean angle relative to vertical. 0° = perfectly straight
     shoulder = np.array(shoulder)
     hip      = np.array(hip)
 
@@ -57,16 +49,12 @@ def calculate_back_angle(shoulder, hip):
 
 
 def calculate_back_angle_3d(shoulder_3d, hip_3d):
-    """
-    Вычисляет угол наклона спины относительно вертикали в 3D.
-    Точно работает при любом положении камеры, включая диагональную.
-    0 градусов = идеально прямая спина.
-    """
+    # 3D back lean angle relative to vertical. Works at any camera angle. 0° = perfectly straight
     shoulder = np.array(shoulder_3d)
     hip      = np.array(hip_3d)
 
     vector   = shoulder - hip
-    vertical = np.array([0, -1, 0])  # вертикаль в MediaPipe 3D-пространстве (Y вниз)
+    vertical = np.array([0, -1, 0])  # vertical in MediaPipe 3D space (Y points down)
 
     norm = np.linalg.norm(vector)
     if norm < 1e-6:
@@ -81,36 +69,32 @@ def calculate_back_angle_3d(shoulder_3d, hip_3d):
 
 def calculate_knee_deviation_3d(knee_3d, ankle_3d, hip_3d):
     """
-    Вычисляет завал колена внутрь используя 3D координаты.
-    Работает при диагональной камере в отличие от 2D версии.
+    Knee cave deviation using 3D coords. Works with diagonal cameras unlike 2D.
 
-    Логика: проецируем колено на линию бедро-лодыжка и смотрим
-    насколько оно отклонилось в сторону.
-
-    Возвращает:
-        float: отклонение (отрицательное = завал внутрь)
+    Projects the knee onto the hip-ankle axis and measures lateral offset.
+    Returns negative values for inward cave.
     """
     knee  = np.array(knee_3d)
     ankle = np.array(ankle_3d)
     hip   = np.array(hip_3d)
 
-    # Вектор от лодыжки до бедра (ось ноги)
+    # Vector from ankle to hip (leg axis)
     leg_axis = hip - ankle
     leg_axis_norm = np.linalg.norm(leg_axis)
 
     if leg_axis_norm < 1e-6:
         return 0.0
 
-    # Проекция колена на ось ноги
+    # Project knee onto leg axis
     leg_unit   = leg_axis / leg_axis_norm
     knee_vec   = knee - ankle
     projection = np.dot(knee_vec, leg_unit) * leg_unit
 
-    # Отклонение колена от оси ноги
+    # Lateral deviation from leg axis
     deviation = knee_vec - projection
     deviation_magnitude = np.linalg.norm(deviation)
 
-    # Знак: смотрим по оси X (влево/вправо)
+    # Sign based on X axis (left/right)
     sign = 1 if deviation[0] >= 0 else -1
 
     return round(sign * deviation_magnitude, 4)
@@ -118,11 +102,8 @@ def calculate_knee_deviation_3d(knee_3d, ankle_3d, hip_3d):
 
 def estimate_camera_angle(landmarks_3d):
     """
-    Оценивает угол камеры по разнице z-координат бёдер.
-
-    Возвращает:
-        str:   'side' или 'diagonal'
-        float: угол отклонения в градусах
+    Estimates camera angle from the Z-depth difference between hips.
+    Returns ('side' | 'diagonal', deviation_degrees).
     """
     left_z  = landmarks_3d.get("left_hip_z", 0)
     right_z = landmarks_3d.get("right_hip_z", 0)
@@ -136,9 +117,8 @@ def estimate_camera_angle(landmarks_3d):
 
 def get_best_leg(results, current_leg: str = "left", switch_threshold: float = 0.15) -> str:
     """
-    Определяет какая нога видна лучше по visibility суставов.
-    switch_threshold — минимальная разница чтобы переключить ногу.
-    Предотвращает прыжки между ногами при схожей видимости.
+    Returns the leg with better joint visibility.
+    switch_threshold prevents flickering when both legs are similarly visible.
     """
     if not results.pose_landmarks or len(results.pose_landmarks) == 0:
         return current_leg
