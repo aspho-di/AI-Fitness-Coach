@@ -912,13 +912,13 @@ class CalibOverlay(QWidget):
         layout.addSpacing(8)
 
         # Framed video preview
-        frame = HudPanel(accent=C['neon'], corner=16)
-        frame.setFixedSize(640, 360)
-        fv = QVBoxLayout(frame)
+        self._frame_panel = HudPanel(accent=C['neon'], corner=16)
+        self._frame_panel.setFixedSize(640, 360)
+        fv = QVBoxLayout(self._frame_panel)
         fv.setContentsMargins(2, 2, 2, 2)
         self.video = VideoWidget()
         fv.addWidget(self.video)
-        layout.addWidget(frame)
+        layout.addWidget(self._frame_panel)
 
     def show_frame(self, bgr): self.video.show_frame(bgr)
     def set_phase(self, phase):
@@ -929,6 +929,17 @@ class CalibOverlay(QWidget):
             color:{color}; font-family:Consolas,monospace;
             font-size:36px; font-weight:700; letter-spacing:4px; background:transparent;
         """)
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        available_h = max(180, self.height() - 160)
+        available_w = max(320, self.width() - 40)
+        panel_h = min(360, available_h)
+        panel_w = min(640, available_w)
+        if panel_w / panel_h > 16 / 9:
+            panel_w = int(panel_h * 16 / 9)
+        else:
+            panel_h = int(panel_w * 9 / 16)
+        self._frame_panel.setFixedSize(panel_w, panel_h)
 
 #  MAIN WINDOW
 
@@ -974,7 +985,12 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        QTimer.singleShot(0, self._update_calib_overlay)
+
+    def _update_calib_overlay(self):
         self._calib_overlay.setGeometry(self._analysis.rect())
+        if self._calib_overlay.isVisible():
+            self._calib_overlay.raise_()
 
     # Navigation
     def _start(self, source, path):
@@ -1013,11 +1029,15 @@ class MainWindow(QMainWindow):
         self._analysis.reset()
         self._stack.setCurrentWidget(self._analysis)
         if self._source == 'webcam':
-            self._calib_overlay.show()
-            self._calib_overlay.setGeometry(self._analysis.rect())
+            QTimer.singleShot(0, self._show_calib_overlay)
             self._worker.go_calibrate()
         else:
             self._worker.go_analyze()
+    
+    def _show_calib_overlay(self):
+        self._calib_overlay.setGeometry(self._analysis.rect())
+        self._calib_overlay.show()
+        self._calib_overlay.raise_()
 
     def _go_menu(self):
         self._calib_overlay.hide()

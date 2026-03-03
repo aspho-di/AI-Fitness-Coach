@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('icon.ico', '.')]
+datas = []
 binaries = []
 hiddenimports = ['cv2', 'numpy']
 tmp_ret = collect_all('mediapipe')
@@ -42,5 +42,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['icon.ico'],
+    icon=['C:\\Users\\diana\\OneDrive\\Desktop\\AI Fitness Coach\\icon.ico'],
 )
